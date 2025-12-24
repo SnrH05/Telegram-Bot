@@ -7,12 +7,12 @@ import time
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser 
 from google import genai
-from google.genai import types # Ayarlar için gerekli
+from google.genai import types 
 from telegram import Bot
 from telegram.constants import ParseMode
 
 # --- Ayarlar ---
-print("⚙️ Sistem Başlatılıyor...")
+print("⚙️ Sistem Başlatılıyor (Gemini 2.0 Motoru)...")
 
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 KANAL_ID_RAW = os.getenv("KANAL_ID", "").strip()
@@ -25,6 +25,7 @@ if not TOKEN or not GEMINI_KEY:
 
 # --- İstemci Başlatma ---
 try:
+    # v1 API sürümü ile bağlanıyoruz
     client = genai.Client(
         api_key=GEMINI_KEY,
         http_options={'api_version': 'v1'} 
@@ -79,12 +80,12 @@ def haber_yeni_mi(entry):
     except:
         return True 
 
-# --- GÜÇLENDİRİLMİŞ AI FONKSİYONU ---
+# --- GÜÇLENDİRİLMİŞ AI FONKSİYONU (Gemini 2.0) ---
 async def ai_ozetle(baslik, icerik):
     try:
         metin_kaynak = icerik if len(icerik) > 50 else baslik
         
-        # SANSÜRLERİ KALDIRIYORUZ (BLOCK_NONE)
+        # SANSÜRLERİ KALDIR (BLOCK_NONE)
         config = types.GenerateContentConfig(
             safety_settings=[
                 types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
@@ -94,15 +95,16 @@ async def ai_ozetle(baslik, icerik):
             ]
         )
 
+        # BURASI DEĞİŞTİ: Listendeki 'gemini-2.0-flash' modelini kullanıyoruz
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             contents=f"Bu haberi tarafsız, profesyonel bir dille ve 2 kısa cümleyle Türkçe özetle:\n\n{metin_kaynak}",
             config=config
         )
         
         if response and response.text:
             return response.text.strip()
-        return None # Başarısız olursa None dön
+        return None 
 
     except Exception as e:
         print(f"⚠️ AI Hatası: {e}")
@@ -115,28 +117,20 @@ async def haberleri_kontrol_et():
             for entry in feed.entries[:5]:
                 link = entry.link.strip()
                 
-                # Çift mesaj ve eski haber kontrolü
                 if link_var_mi(link): continue 
                 if not haber_yeni_mi(entry):
                     link_kaydet(link)
                     continue
 
-                link_kaydet(link) # Spam koruması için önce kaydet
+                link_kaydet(link) 
 
                 try:
-                    # Haberin orjinal açıklaması (Yedek Plan)
                     orjinal_ozet = entry.get("summary", entry.get("description", "Detaylar için linke tıklayın."))
-                    
-                    # AI Özetini Dene
                     ai_sonuc = await ai_ozetle(entry.title, orjinal_ozet)
 
-                    # --- ZEKİ KARAR MEKANİZMASI ---
                     if ai_sonuc:
-                        # AI Başarılıysa
-                        final_metin = f"🤖 <b>AI ÖZETİ:</b>\n{ai_sonuc}"
+                        final_metin = f"🤖 <b>AI ÖZETİ (v2.0):</b>\n{ai_sonuc}"
                     else:
-                        # AI Sansürlerse veya Hata Verirse Orjinali Kullan
-                        # HTML etiketlerini temizle ve kısalt
                         temiz_ozet = orjinal_ozet.replace("<p>", "").replace("</p>", "").replace("<br>", "\n")[:250]
                         final_metin = f"📝 <b>HABER ÖZETİ:</b>\n{temiz_ozet}..."
 
@@ -158,7 +152,7 @@ async def haberleri_kontrol_et():
 
 async def main():
     db_baslat() 
-    print("🚀 Bot (Sansürsüz + B Planlı) Modunda Başladı...")
+    print("🚀 Bot Gemini 2.0 Flash ile Başladı...")
     while True:
         await haberleri_kontrol_et()
         await asyncio.sleep(600)
