@@ -37,7 +37,8 @@ except Exception as e:
 RSS_LIST = [
     "https://cryptonews.com/news/feed/",
     "https://feeds.bbci.co.uk/turkce/rss.xml",
-    "https://www.ntv.com.tr/ekonomi.rss"
+    "https://www.ntv.com.tr/ekonomi.rss",
+    "https://www.reddit.com/r/CryptoCurrency.rss"
 ]
 RSS_LIST = [url.strip() for url in RSS_LIST]
 
