@@ -1,22 +1,42 @@
 import feedparser
 import asyncio
 import os
+import sys # Sistemi durdurmak için gerekli
 from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# --- Ayarlar ---
+# --- Debug ve Ayarlar ---
+print("⚙️ Sistem Değişkenleri Kontrol Ediliyor...")
+
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 KANAL_ID_RAW = os.getenv("KANAL_ID", "").strip()
 KANAL_ID = int(KANAL_ID_RAW) if KANAL_ID_RAW else None
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
-# --- Gemini İstemcisi (Hatanın Çözümü Burada) ---
-# 'http_options' parametresi ile AI Studio üzerinden çalışmasını zorluyoruz
-client = genai.Client(
-    api_key=GEMINI_KEY,
-    http_options={'api_version': 'v1'} # Beta olmayan stabil sürüm
-)
+# 1. Sigorta: Token Kontrolü
+if not TOKEN:
+    print("❌ HATA: BOT_TOKEN bulunamadı! Railway Variables kısmını kontrol et.")
+    sys.exit(1)
+
+# 2. Sigorta: API Key Kontrolü (Hatanın Sebebi Burası)
+if not GEMINI_KEY:
+    print("❌ HATA: GEMINI_KEY Railway'den okunamadı! Boş geliyor.")
+    print("👉 İpucu: Railway'de değişken adını tam olarak 'GEMINI_KEY' yazdığından emin ol.")
+    sys.exit(1)
+else:
+    # Güvenlik için sadece ilk 4 karakteri yazdıralım
+    print(f"✅ API Key Başarıyla Okundu: {GEMINI_KEY[:4]}****")
+
+# --- İstemci Başlatma ---
+try:
+    client = genai.Client(
+        api_key=GEMINI_KEY,
+        http_options={'api_version': 'v1'} 
+    )
+except Exception as e:
+    print(f"❌ İstemci Başlatma Hatası: {e}")
+    sys.exit(1)
 
 RSS_LIST = [
     "https://cryptonews.com/news/feed/",
@@ -29,12 +49,9 @@ bot = Bot(token=TOKEN)
 gonderilenler = set()
 
 async def ai_ozetle(baslik, icerik):
-    if not GEMINI_KEY: return "API Key eksik."
     try:
-        # Özetlenecek metni hazırla
         metin_kaynak = icerik if len(icerik) > 50 else baslik
         
-        # Model ismini tırnak içinde direkt veriyoruz
         response = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=f"Bu haberi 2 kısa cümleyle Türkçe özetle:\n\n{metin_kaynak}"
@@ -45,7 +62,7 @@ async def ai_ozetle(baslik, icerik):
         return "Özet oluşturulamadı."
 
     except Exception as e:
-        print(f"❌ Gemini Hatası: {e}")
+        print(f"⚠️ AI Anlık Hata: {e}")
         return "AI şu an özetleyemedi."
 
 async def haberleri_kontrol_et():
@@ -66,17 +83,13 @@ async def haberleri_kontrol_et():
 
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     gonderilenler.add(link)
-                    print(f"✅ Paylaşıldı: {entry.title[:30]}")
+                    print(f"✅ Paylaşıldı: {entry.title[:20]}...")
                     await asyncio.sleep(5) 
         except Exception as e:
-            print(f"⚠️ Hata: {e}")
+            print(f"⚠️ Akış hatası: {e}")
 
 async def main():
-    if not KANAL_ID or not TOKEN:
-        print("❌ HATA: KANAL_ID veya TOKEN eksik!")
-        return
-    
-    print("🚀 Bot ve AI Motoru Stabil Modda Başlatıldı...")
+    print("🚀 Bot Başlatılıyor...")
     while True:
         await haberleri_kontrol_et()
         await asyncio.sleep(600)
