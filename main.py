@@ -99,7 +99,7 @@ async def ai_ozetle(baslik, icerik):
             ]
         )
 
-        # BURASI DEĞİŞTİ: Listendeki 'gemini-2.0-flash' modelini kullanıyoruz
+        # Listendeki 'gemini-2.0-flash' modelini kullanıyoruz
         response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=f"Bu haberi tarafsız, profesyonel bir dille ve 2 kısa cümleyle Türkçe özetle:\n\n{metin_kaynak}",
@@ -156,10 +156,17 @@ async def haberleri_kontrol_et():
 
 async def main():
     db_baslat() 
-    print("🚀 Bot Gemini 2.0 Flash ile Başladı...")
+    print("🚀 Bot Gemini 2.0 Flash ile Başladı! (Nöbet Sistemi Aktif)")
+    
     while True:
+        # ŞİMDİKİ SAATİ YAZDIRIP KONTROLE BAŞLIYORUZ
+        print(f"🔄 ({datetime.now().strftime('%H:%M:%S')}) RSS Taraması Başlıyor...")
+        
         await haberleri_kontrol_et()
-        await asyncio.sleep(60)
+        
+        # İŞLEM BİTİNCE UYKU LOGU
+        print("💤 Tüm kontroller tamam. 5 dakika (300sn) mola...")
+        await asyncio.sleep(300)
 
 if __name__ == "__main__":
     asyncio.run(main())
