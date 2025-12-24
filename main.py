@@ -39,7 +39,8 @@ RSS_LIST = [
     "https://feeds.bbci.co.uk/turkce/rss.xml",
     "https://www.ntv.com.tr/ekonomi.rss",
     "https://www.reddit.com/r/CryptoCurrency.rss",
-    "https://www.milliyet.com.tr/rss/rssnew/dunyarss.xml"
+    "https://www.milliyet.com.tr/rss/rssnew/dunyarss.xml",
+    "https://www.ntv.com.tr/son-dakika.rss"
 ]
 RSS_LIST = [url.strip() for url in RSS_LIST]
 
