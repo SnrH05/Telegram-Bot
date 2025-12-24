@@ -157,7 +157,7 @@ async def main():
     print("🚀 Bot Gemini 2.0 Flash ile Başladı...")
     while True:
         await haberleri_kontrol_et()
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main())
