@@ -145,5 +145,6 @@ async def main():
         await haberleri_kontrol_et()
         await asyncio.sleep(600)
 
+
 if __name__ == "__main__":
     asyncio.run(main())
