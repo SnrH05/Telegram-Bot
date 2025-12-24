@@ -5,12 +5,13 @@ import sys
 import sqlite3
 import time
 from datetime import datetime, timedelta
-from dateutil import parser as date_parser # Tarih formatlarını anlamak için
+from dateutil import parser as date_parser 
 from google import genai
+from google.genai import types # Ayarlar için gerekli
 from telegram import Bot
 from telegram.constants import ParseMode
 
-# --- Debug ve Ayarlar ---
+# --- Ayarlar ---
 print("⚙️ Sistem Başlatılıyor...")
 
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -18,12 +19,8 @@ KANAL_ID_RAW = os.getenv("KANAL_ID", "").strip()
 KANAL_ID = int(KANAL_ID_RAW) if KANAL_ID_RAW else None
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
-# --- Değişken Kontrolleri ---
-if not TOKEN:
-    print("❌ HATA: BOT_TOKEN eksik!")
-    sys.exit(1)
-if not GEMINI_KEY:
-    print("❌ HATA: GEMINI_KEY eksik!")
+if not TOKEN or not GEMINI_KEY:
+    print("❌ HATA: Token veya Key eksik!")
     sys.exit(1)
 
 # --- İstemci Başlatma ---
@@ -45,7 +42,7 @@ RSS_LIST = [url.strip() for url in RSS_LIST]
 
 bot = Bot(token=TOKEN)
 
-# --- VERİTABANI (SQLite) KURULUMU ---
+# --- VERİTABANI ---
 def db_baslat():
     conn = sqlite3.connect("haber_hafizasi.db")
     cursor = conn.cursor()
@@ -68,83 +65,103 @@ def link_kaydet(link):
         cursor.execute("INSERT INTO gonderilenler (link) VALUES (?)", (link,))
         conn.commit()
     except sqlite3.IntegrityError:
-        pass # Zaten varsa hata verme
+        pass 
     conn.close()
 
-# --- YENİ EKLENTİ: ESKİ HABER FİLTRESİ ---
+# --- TARİH KONTROLÜ ---
 def haber_yeni_mi(entry):
-    """Haber 24 saatten eskiyse False döner"""
     try:
-        # Feedparser genelde zamanı 'published_parsed' içinde verir
         if hasattr(entry, 'published_parsed') and entry.published_parsed:
             haber_zamani = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-            su_an = datetime.now()
-            fark = su_an - haber_zamani
-            # Eğer haber 24 saatten (1 gün) eskiyse gönderme
-            if fark > timedelta(hours=24):
+            if (datetime.now() - haber_zamani) > timedelta(hours=24):
                 return False
         return True
     except:
-        return True # Tarih okuyamazsak güvenli taraf seçip 'yeni' sayalım
+        return True 
 
+# --- GÜÇLENDİRİLMİŞ AI FONKSİYONU ---
 async def ai_ozetle(baslik, icerik):
     try:
         metin_kaynak = icerik if len(icerik) > 50 else baslik
+        
+        # SANSÜRLERİ KALDIRIYORUZ (BLOCK_NONE)
+        config = types.GenerateContentConfig(
+            safety_settings=[
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            ]
+        )
+
         response = client.models.generate_content(
             model="gemini-1.5-flash",
-            contents=f"Bu haberi 2 kısa cümleyle Türkçe özetle:\n\n{metin_kaynak}"
+            contents=f"Bu haberi tarafsız, profesyonel bir dille ve 2 kısa cümleyle Türkçe özetle:\n\n{metin_kaynak}",
+            config=config
         )
+        
         if response and response.text:
             return response.text.strip()
-        return "Özet oluşturulamadı."
-    except Exception:
-        return "AI şu an özetleyemedi."
+        return None # Başarısız olursa None dön
+
+    except Exception as e:
+        print(f"⚠️ AI Hatası: {e}")
+        return None
 
 async def haberleri_kontrol_et():
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
-            # İlk 5 habere bakalım (daha derin tarama)
             for entry in feed.entries[:5]:
                 link = entry.link.strip()
                 
-                # 1. Kontrol: Veritabanında var mı?
-                if link_var_mi(link):
-                    continue # Varsa atla
-
-                # 2. Kontrol: Haber çok mu eski? (Örn: Bot yeni açıldı, dünkü haberi atmasın)
+                # Çift mesaj ve eski haber kontrolü
+                if link_var_mi(link): continue 
                 if not haber_yeni_mi(entry):
-                    # Veritabanına yine de kaydedelim ki bir daha sormasın
                     link_kaydet(link)
                     continue
 
-                # --- GÖNDERME İŞLEMİ ---
-                body = entry.get("summary", entry.get("description", ""))
-                ozet = await ai_ozetle(entry.title, body)
-                
-                mesaj = (
-                    f"📰 <b>{entry.title}</b>\n\n"
-                    f"🤖 <b>AI ÖZETİ:</b>\n{ozet}\n\n"
-                    f"🔗 <a href='{link}'>Haberin Tamamı</a>"
-                )
+                link_kaydet(link) # Spam koruması için önce kaydet
 
-                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                
-                # Başarılı olursa kaydet
-                link_kaydet(link)
-                print(f"✅ Paylaşıldı: {entry.title[:20]}...")
-                await asyncio.sleep(5) 
+                try:
+                    # Haberin orjinal açıklaması (Yedek Plan)
+                    orjinal_ozet = entry.get("summary", entry.get("description", "Detaylar için linke tıklayın."))
+                    
+                    # AI Özetini Dene
+                    ai_sonuc = await ai_ozetle(entry.title, orjinal_ozet)
+
+                    # --- ZEKİ KARAR MEKANİZMASI ---
+                    if ai_sonuc:
+                        # AI Başarılıysa
+                        final_metin = f"🤖 <b>AI ÖZETİ:</b>\n{ai_sonuc}"
+                    else:
+                        # AI Sansürlerse veya Hata Verirse Orjinali Kullan
+                        # HTML etiketlerini temizle ve kısalt
+                        temiz_ozet = orjinal_ozet.replace("<p>", "").replace("</p>", "").replace("<br>", "\n")[:250]
+                        final_metin = f"📝 <b>HABER ÖZETİ:</b>\n{temiz_ozet}..."
+
+                    mesaj = (
+                        f"📰 <b>{entry.title}</b>\n\n"
+                        f"{final_metin}\n\n"
+                        f"🔗 <a href='{link}'>Haberin Tamamı</a>"
+                    )
+
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    print(f"✅ Paylaşıldı: {entry.title[:20]}...")
+                    await asyncio.sleep(5) 
+
+                except Exception as e:
+                    print(f"❌ Mesaj Hatası: {e}")
 
         except Exception as e:
             print(f"⚠️ Akış hatası: {e}")
 
 async def main():
-    db_baslat() # Veritabanını oluştur
-    print("🚀 Bot Akıllı Hafıza Modunda Başlatıldı...")
+    db_baslat() 
+    print("🚀 Bot (Sansürsüz + B Planlı) Modunda Başladı...")
     while True:
         await haberleri_kontrol_et()
         await asyncio.sleep(600)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
