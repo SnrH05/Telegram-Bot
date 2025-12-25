@@ -36,12 +36,12 @@ except Exception as e:
 
 RSS_LIST = [
     "https://cryptonews.com/news/feed/",
-    "https://feeds.bbci.co.uk/turkce/rss.xml",
-    "https://www.ntv.com.tr/ekonomi.rss",
-    "https://www.reddit.com/r/CryptoCurrency.rss",
-    "https://www.milliyet.com.tr/rss/rssnew/dunyarss.xml",
-    "https://www.ntv.com.tr/son-dakika.rss",
-    "https://www.milliyet.com.tr/rss/rssnew/sondakikarss.xml"
+    "https://cointelegraph.com/rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://decrypt.co/feed",
+    "https://cryptoslate.com/feed/",
+    "https://bitcoinmagazine.com/news/feed",
+    "https://tr.cointelegraph.com/rss"
 ]
 RSS_LIST = [url.strip() for url in RSS_LIST]
 
@@ -102,7 +102,7 @@ async def ai_ozetle(baslik, icerik):
         # Listendeki 'gemini-2.0-flash' modelini kullanıyoruz
         response = client.models.generate_content(
             model="gemini-2.0-flash",
-            contents=f"Bu haberi tarafsız, profesyonel bir dille ve 2 kısa cümleyle Türkçe özetle:\n\n{metin_kaynak}",
+            contents=f"Bu haberi tarafsız, profesyonel bir dille ve 2 kısa cümleyle Türkçe özetle aynı zamanda haberini yaptığın coinin artıp azalacağının yorumunu yap:\n\n{metin_kaynak}",
             config=config
         )
         
