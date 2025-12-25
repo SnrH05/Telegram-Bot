@@ -12,7 +12,7 @@ from telegram import Bot
 from telegram.constants import ParseMode
 
 # --- Ayarlar ---
-print("⚙️ Sistem Başlatılıyor (Gemini 2.0 Motoru)...")
+print("⚙️ Sistem Başlatılıyor (Gemini 2.0 Analist Modu)...")
 
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 KANAL_ID_RAW = os.getenv("KANAL_ID", "").strip()
@@ -20,7 +20,7 @@ KANAL_ID = int(KANAL_ID_RAW) if KANAL_ID_RAW else None
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
 if not TOKEN or not GEMINI_KEY:
-    print("❌ HATA: Token veya Key eksik!")
+    print("❌ HATA: Token veya Key eksik! (.env kontrol et)")
     sys.exit(1)
 
 # --- İstemci Başlatma ---
@@ -84,7 +84,7 @@ def haber_yeni_mi(entry):
     except:
         return True 
 
-# --- GÜÇLENDİRİLMİŞ AI FONKSİYONU (Gemini 2.0) ---
+# --- GÜÇLENDİRİLMİŞ AI ANALİST FONKSİYONU ---
 async def ai_ozetle(baslik, icerik):
     try:
         metin_kaynak = icerik if len(icerik) > 50 else baslik
@@ -99,10 +99,22 @@ async def ai_ozetle(baslik, icerik):
             ]
         )
 
+        # --- YENİ GELİŞMİŞ PROMPT (ANALİST MODU) ---
+        prompt = (
+            f"Sen deneyimli bir kripto para analisti ve piyasa stratejistisin. "
+            f"Aşağıdaki haberi Telegram kanalımdaki yatırımcılar için analiz et.\n\n"
+            f"Haber Metni: {metin_kaynak}\n\n"
+            f"İstediğim Çıktı Formatı (Aynen bu yapıyı koru, Türkçe yaz):\n"
+            f"1. İlk satıra haberin en can alıcı noktasını tek cümleyle, heyecan verici bir dille özetle (Emoji kullan).\n"
+            f"2. Altına '💡 Önemli Detay:' diyerek haberdeki kritik veriyi yaz.\n"
+            f"3. En alta '🎯 Piyasa Beklentisi:' başlığı aç. Bu haberin ilgili coinin fiyatına etkisi 'Yükseliş (Bullish) 🚀', 'Düşüş (Bearish) 🔻' veya 'Nötr ⚖️' mi olur? Sebebini 5 kelimeyle açıkla.\n"
+            f"Not: Asla 'kesin artar/azalır' deme, 'potansiyeli taşıyor' veya 'sinyali veriyor' dilini kullan."
+        )
+
         # Listendeki 'gemini-2.0-flash' modelini kullanıyoruz
         response = client.models.generate_content(
             model="gemini-2.0-flash",
-            contents=f"Bu haberi tarafsız, profesyonel bir dille ve 2 kısa cümleyle Türkçe özetle aynı zamanda haberini yaptığın coinin artıp azalacağının yorumunu yap:\n\n{metin_kaynak}",
+            contents=prompt,
             config=config
         )
         
@@ -118,30 +130,34 @@ async def haberleri_kontrol_et():
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
-            for entry in feed.entries[:5]:
+            for entry in feed.entries[:5]: # Her feedden son 5 haberi kontrol et
                 link = entry.link.strip()
                 
                 if link_var_mi(link): continue 
                 if not haber_yeni_mi(entry):
-                    link_kaydet(link)
+                    link_kaydet(link) # Eskiyse veritabanına ekle geç
                     continue
 
                 link_kaydet(link) 
 
                 try:
                     orjinal_ozet = entry.get("summary", entry.get("description", "Detaylar için linke tıklayın."))
+                    
+                    # AI Analizi Buradan Çağırılıyor
                     ai_sonuc = await ai_ozetle(entry.title, orjinal_ozet)
 
                     if ai_sonuc:
-                        final_metin = f"🤖 <b>AI ÖZETİ (v2.0):</b>\n{ai_sonuc}"
+                        # AI başarılıysa Analiz formatını basıyoruz
+                        final_metin = f"🧠 <b>PİYASA ANALİZİ:</b>\n{ai_sonuc}"
                     else:
+                        # AI hata verirse düz özete dönüyoruz
                         temiz_ozet = orjinal_ozet.replace("<p>", "").replace("</p>", "").replace("<br>", "\n")[:250]
                         final_metin = f"📝 <b>HABER ÖZETİ:</b>\n{temiz_ozet}..."
 
                     mesaj = (
                         f"📰 <b>{entry.title}</b>\n\n"
                         f"{final_metin}\n\n"
-                        f"🔗 <a href='{link}'>Haberin Tamamı</a>"
+                        f"🔗 <a href='{link}'>Haberin Kaynağı</a>"
                     )
 
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
@@ -152,11 +168,11 @@ async def haberleri_kontrol_et():
                     print(f"❌ Mesaj Hatası: {e}")
 
         except Exception as e:
-            print(f"⚠️ Akış hatası: {e}")
+            print(f"⚠️ Akış hatası ({rss}): {e}")
 
 async def main():
     db_baslat() 
-    print("🚀 Bot Gemini 2.0 Flash ile Başladı! (Nöbet Sistemi Aktif)")
+    print("🚀 Bot Gemini 2.0 Flash (Analist Modu) ile Başladı! (Nöbet Sistemi Aktif)")
     
     while True:
         # ŞİMDİKİ SAATİ YAZDIRIP KONTROLE BAŞLIYORUZ
