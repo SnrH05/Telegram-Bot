@@ -181,8 +181,8 @@ async def main():
         await haberleri_kontrol_et()
         
         # İŞLEM BİTİNCE UYKU LOGU
-        print("💤 Tüm kontroller tamam. 5 dakika (300sn) mola...")
-        await asyncio.sleep(300)
+        print("💤 Tüm kontroller tamam. 1 dakika (60sn) mola...")
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     asyncio.run(main())
