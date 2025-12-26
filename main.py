@@ -27,10 +27,10 @@ if not TOKEN or not GEMINI_KEY or not KANAL_ID:
 client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 bot = Bot(token=TOKEN)
 
-# Binance Bağlantısı (Sadece fiyat okumak için, API Key gerekmez)
-exchange = ccxt.binance({
+# KuCoin Bağlantısı (Amerika sunucularına izin verir)
+exchange = ccxt.kucoin({
     'enableRateLimit': True,
-    'options': {'defaultType': 'future'}
+    # KuCoin'de vadeli yerine spot fiyatlarına bakmak daha stabildir ve RSI için yeterlidir
 })
 
 # --- RSS LİSTESİ ---
