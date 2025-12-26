@@ -22,6 +22,7 @@ if not TOKEN or not GEMINI_KEY or not KANAL_ID:
     print("❌ ENV eksik")
     sys.exit(1)
 
+
 # --- GEMINI ---
 client = genai.Client(
     api_key=GEMINI_KEY,
