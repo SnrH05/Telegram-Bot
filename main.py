@@ -12,7 +12,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ Görsel Odaklı Premium Bot Başlatılıyor...")
+print("⚙️ Premium Skorlu Analist Botu Başlatılıyor...")
 
 # --- ENV ---
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
