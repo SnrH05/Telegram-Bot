@@ -177,6 +177,7 @@ async def ai_analiz(baslik, ozet, coinler):
     prompt = f"""
 Sen elit bir kripto analistisin. HABER: {baslik}\n{ozet}
 COINLER: {coin_text}
+FORMAT DIŞINA ÇIKMA!
 FORMAT:
 🔥 Özet: (max 10 kelime)
 💡 Kritik: (tek cümle)
