@@ -106,7 +106,7 @@ HABER: {baslik}
 {ozet}
 COINLER: {coin_text}
 
-Çıktıyı TAM OLARAK aşağıdaki şablonla ver (Emojileri kullan):
+Çıktıyı TAM OLARAK aşağıdaki şablonla ver ve Tamamdır işte analizin, Elit bir kripto analisti olarak yorumum gibi ibareleri kullanma (Emojileri kullan):
 
 🔥 Özet: [Haberin tek cümlelik vurucu özeti]
 
