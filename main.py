@@ -123,7 +123,7 @@ async def piyasayi_tarama():
             continue
 
 # ==========================================
-# 📰 MODÜL 2: HABER VE AI (ESKİ KODUN)
+# 📰 MODÜL 2: HABER VE AI 
 # ==========================================
 
 def db_baslat():
