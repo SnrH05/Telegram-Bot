@@ -4,13 +4,15 @@ import os
 import sys
 import sqlite3
 import time
+import re
 from datetime import datetime, timedelta
+from collections import defaultdict
 from google import genai
 from google.genai import types
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ Sistem Başlatılıyor (Skorlu Analist Modu)...")
+print("⚙️ Sistem Başlatılıyor (Skorlu Analist Modu + Günlük Özet)...")
 
 # --- ENV ---
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -39,6 +41,16 @@ RSS_LIST = [
 ]
 
 bot = Bot(token=TOKEN)
+
+# --- GÜNLÜK COIN İSTATİSTİK ---
+gunluk_coin_istatistik = defaultdict(lambda: {
+    "bullish": 0,
+    "bearish": 0,
+    "neutral": 0,
+    "total": 0
+})
+
+last_summary_day = None
 
 # --- DB ---
 def db_baslat():
@@ -76,7 +88,11 @@ def haber_yeni_mi(entry):
         pass
     return True
 
-# --- SKOR PARSER ---
+# --- COIN DETECT ---
+def btc_var_mi(text):
+    return bool(re.search(r"\bBTC\b|bitcoin", text.lower()))
+
+# --- SKOR ---
 def skor_ayikla(text):
     for line in text.splitlines():
         if "Skor:" in line:
@@ -95,8 +111,7 @@ def skor_etiketi(s):
 
 # --- AI ANALİZ ---
 async def ai_analiz(baslik, ozet):
-    try:
-        prompt = f"""
+    prompt = f"""
 Sen profesyonel bir kripto para analisti ve trader'sın.
 
 HABER:
@@ -111,32 +126,44 @@ FORMATI AYNEN KORU:
 Skor: [-2,-1,0,1,2]
 Yorum: Bullish 🚀 / Bearish 🔻 / Nötr ⚖️
 Gerekçe: en fazla 6 kelime
-
-SKOR KURALLARI:
-+2 = Resmi ve güçlü pozitif
-+1 = Sınırlı pozitif
-0 = Belirsizlik / jeopolitik risk
--1 = Risk artışı
--2 = Açık negatif
 """
 
-        config = types.GenerateContentConfig(
-            safety_settings=[
-                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE")
-            ]
-        )
+    r = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt
+    )
 
-        r = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=config
-        )
+    return r.text.strip() if r.text else None
 
-        return r.text.strip() if r.text else None
+# --- GÜNLÜK ÖZET ---
+async def gunluk_btc_ozet():
+    btc = gunluk_coin_istatistik["BTC"]
+    if btc["total"] == 0:
+        return
 
-    except Exception as e:
-        print("AI Hata:", e)
-        return None
+    if btc["bullish"] > btc["bearish"]:
+        denge = "🟢 Hafif Pozitif"
+    elif btc["bearish"] > btc["bullish"]:
+        denge = "🔴 Negatif Baskı"
+    else:
+        denge = "⚖️ Dengeli"
+
+    mesaj = f"""
+📊 <b>GÜNLÜK BTC HABER ÖZETİ</b>
+
+<b>Toplam Haber:</b> {btc["total"]}
+🟢 <b>Bullish:</b> {btc["bullish"]}
+🔴 <b>Bearish:</b> {btc["bearish"]}
+⚖️ <b>Nötr:</b> {btc["neutral"]}
+
+<b>Genel Denge:</b> {denge}
+"""
+
+    await bot.send_message(
+        chat_id=KANAL_ID,
+        text=mesaj,
+        parse_mode=ParseMode.HTML
+    )
 
 # --- RSS LOOP ---
 async def haberleri_kontrol_et():
@@ -154,11 +181,20 @@ async def haberleri_kontrol_et():
 
             ozet = entry.get("summary", "")[:500]
             ai_text = await ai_analiz(entry.title, ozet)
-
             if not ai_text: continue
 
             skor = skor_ayikla(ai_text)
             etiket = skor_etiketi(skor)
+
+            # BTC SAYACI
+            if btc_var_mi(entry.title + " " + ozet):
+                gunluk_coin_istatistik["BTC"]["total"] += 1
+                if skor > 0:
+                    gunluk_coin_istatistik["BTC"]["bullish"] += 1
+                elif skor < 0:
+                    gunluk_coin_istatistik["BTC"]["bearish"] += 1
+                else:
+                    gunluk_coin_istatistik["BTC"]["neutral"] += 1
 
             mesaj = f"""
 📰 <b>{entry.title}</b>
@@ -183,18 +219,23 @@ async def haberleri_kontrol_et():
 
 # --- MAIN ---
 async def main():
+    global last_summary_day
     db_baslat()
-    print("🚀 Bot aktif (Skor Sistemi ON)")
+    print("🚀 Bot aktif (Günlük BTC Özeti AKTİF)")
 
     while True:
-        # ŞİMDİKİ SAATİ LOGA YAZ
         print(f"🔄 ({datetime.now().strftime('%H:%M:%S')}) RSS Taraması Başlıyor...")
 
         await haberleri_kontrol_et()
 
-        # TARAMA BİTTİ LOGU
-        print("💤 Tüm kontroller tamamlandı. 60 saniye bekleniyor...\n")
+        today = datetime.now().date()
+        if last_summary_day != today:
+            if last_summary_day is not None:
+                await gunluk_btc_ozet()
+                gunluk_coin_istatistik.clear()
+            last_summary_day = today
 
+        print("💤 Tüm kontroller tamamlandı. 60 saniye bekleniyor...\n")
         await asyncio.sleep(60)
 
 if __name__ == "__main__":
