@@ -182,6 +182,7 @@ FORMAT:
 🔥 Özet: (max 10 kelime)
 💡 Kritik: (tek cümle)
 🎯 Skor: (-2 ile 2 arası sadece rakam)
+Yorum: Bullish 🚀 / Bearish 🔻 / Nötr ⚖️
 """
     try:
         r = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
