@@ -1,3 +1,5 @@
+ccxt
+numpy
 python-telegram-bot
 google-genai
 feedparser
