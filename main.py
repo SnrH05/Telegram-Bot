@@ -5,97 +5,125 @@ import sys
 import sqlite3
 import time
 import re
-import threading
+import ccxt
+import numpy as np
 from datetime import datetime, timedelta
-from flask import Flask, request
 from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ Premium Hibrit Bot (Haber + Sinyal) Başlatılıyor...")
+print("⚙️ Tam Otomatik Hibrit Bot (Haber + RSI Sinyal) Başlatılıyor...")
 
 # --- ENV ---
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 KANAL_ID = int(os.getenv("KANAL_ID", "0"))
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
-WEBHOOK_PORT = int(os.getenv("PORT", 8080)) # Sunucu portu (Genelde 80 veya 8080)
 
 if not TOKEN or not GEMINI_KEY or not KANAL_ID:
-    print("❌ ENV eksik")
+    print("❌ ENV eksik! Lütfen Railway Variables kısmını kontrol et.")
     sys.exit(1)
 
-# --- GLOBAL DEĞİŞKENLER ---
+# --- AYARLAR ---
 client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 bot = Bot(token=TOKEN)
-app = Flask(__name__)
-main_loop = None # Ana döngüye threadlerden erişmek için
 
-# --- RSS LISTESI ---
+# Borsa Bağlantısı (API Key gerekmez, sadece fiyat okuyoruz)
+exchange = ccxt.binance({
+    'enableRateLimit': True,
+    'options': {'defaultType': 'future'} # Vadeli işlem fiyatları
+})
+
+# --- LİSTELER ---
 RSS_LIST = [
     "https://cryptonews.com/news/feed/",
     "https://cointelegraph.com/rss",
-    "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://decrypt.co/feed",
+    "https://decrypt.co/feed"
 ]
 
-# --- COIN EVRENİ ---
+# Takip Edilecek Coinler (USDT paritesi varsayılır)
 COIN_LIST = [
     "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
-    "TON","LINK","DOT","MATIC","ARB","OP","LTC","BCH"
+    "TON","LINK","DOT","MATIC","LTC","BCH","PEPE","FET"
 ]
 
 # ==========================================
-# 🚀 1. MODÜL: TRADINGVIEW WEBHOOK (SİNYAL)
+# 📈 MODÜL 1: TEKNİK ANALİZ (SİNYAL)
 # ==========================================
 
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """TradingView'dan gelen POST isteğini karşılar"""
-    try:
-        data = request.json
-        # TradingView'dan beklediğimiz JSON formatı:
-        # {"symbol": "BTCUSDT", "side": "BUY", "price": 65000, "desc": "RSI Breakout"}
+def rsi_hesapla(fiyatlar, periyot=14):
+    """Basit RSI Hesaplama Fonksiyonu"""
+    deltalar = np.diff(fiyatlar)
+    seed = deltalar[:periyot+1]
+    up = seed[seed >= 0].sum()/periyot
+    down = -seed[seed < 0].sum()/periyot
+    rs = up/down
+    rsi = np.zeros_like(fiyatlar)
+    rsi[:periyot] = 100. - 100./(1. + rs)
+
+    for i in range(periyot, len(fiyatlar)):
+        delta = deltalar[i-1]
+        if delta > 0:
+            upval = delta
+            downval = 0.
+        else:
+            upval = 0.
+            downval = -delta
         
-        symbol = data.get('symbol', 'UNKNOWN')
-        side = data.get('side', 'SİNYAL')
-        price = data.get('price', '0')
-        desc = data.get('desc', 'Teknik Analiz')
-
-        emoji = "🟢" if side.upper() == "BUY" or side.upper() == "LONG" else "🔴"
+        up = (up * (periyot - 1) + upval) / periyot
+        down = (down * (periyot - 1) + downval) / periyot
+        rs = up/down
+        rsi[i] = 100. - 100./(1. + rs)
         
-        mesaj = f"""
-🚨 <b>YENİ SİNYAL GELDİ!</b>
+    return rsi[-1] # Son RSI değerini döndür
 
-🪙 <b>{symbol}</b>
-{emoji} <b>Yön:</b> {side.upper()}
-💰 <b>Fiyat:</b> {price}
-📉 <b>Strateji:</b> {desc}
+async def piyasayi_tarama():
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) Teknik Analiz Taraması Başladı...")
+    
+    for coin in COIN_LIST:
+        symbol = f"{coin}/USDT"
+        try:
+            # Son 20 mumluk veriyi çek (1 Saatlik grafik)
+            bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=20)
+            closes = [x[4] for x in bars] # Sadece kapanış fiyatlarını al
+            
+            # RSI Hesapla
+            guncel_rsi = rsi_hesapla(np.array(closes))
+            fiyat = closes[-1]
+            
+            sinyal_yonu = None
+            mesaj_ek = ""
 
-🤖 <i>TradingView Bot</i>
+            # --- STRATEJİ (RSI 30-70) ---
+            if guncel_rsi < 30:
+                sinyal_yonu = "LONG (AL) 🟢"
+                mesaj_ek = f"📉 RSI Aşırı Satımda ({guncel_rsi:.2f}). Tepki gelebilir!"
+            elif guncel_rsi > 70:
+                sinyal_yonu = "SHORT (SAT) 🔴"
+                mesaj_ek = f"📈 RSI Aşırı Alımda ({guncel_rsi:.2f}). Düzeltme gelebilir!"
+
+            # Sinyal varsa gönder
+            if sinyal_yonu:
+                mesaj = f"""
+🚨 <b>TEKNİK SİNYAL TESPİT EDİLDİ</b>
+
+🪙 <b>#{coin}</b>
+📊 <b>Sinyal:</b> {sinyal_yonu}
+💰 <b>Fiyat:</b> ${fiyat}
+📉 <b>İndikatör:</b> RSI (1s)
+
+ℹ️ <i>{mesaj_ek}</i>
 """
-        # Flask (Thread) içinden Async (Ana Döngü) fonksiyon çağırma:
-        if main_loop:
-            asyncio.run_coroutine_threadsafe(
-                bot.send_message(
-                    chat_id=KANAL_ID, 
-                    text=mesaj, 
-                    parse_mode=ParseMode.HTML
-                ),
-                main_loop
-            )
-        return "Sinyal Alindi", 200
-    except Exception as e:
-        print(f"Webhook Hatası: {e}")
-        return "Hata", 500
+                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                print(f"🚀 Sinyal Gönderildi: {coin}")
+                
+            await asyncio.sleep(1) # API limitine takılmamak için bekle
 
-def run_flask_server():
-    """Flask sunucusunu ayrı thread'de başlatır"""
-    print(f"📡 Webhook Dinleniyor: Port {WEBHOOK_PORT}")
-    # '0.0.0.0' dışarıdan erişime açar.
-    app.run(host='0.0.0.0', port=WEBHOOK_PORT, debug=False, use_reloader=False)
+        except Exception as e:
+            print(f"Hata ({coin}): {e}")
+            continue
 
 # ==========================================
-# 📰 2. MODÜL: HABER VE AI (ESKİ KODUN)
+# 📰 MODÜL 2: HABER VE AI (ESKİ KODUN)
 # ==========================================
 
 def db_baslat():
@@ -119,17 +147,15 @@ def link_kaydet(link):
     try:
         c.execute("INSERT INTO gonderilenler VALUES (?)", (link,))
         conn.commit()
-    except:
-        pass
+    except: pass
     conn.close()
 
 def haber_yeni_mi(entry):
     try:
         if entry.published_parsed:
             t = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-            return (datetime.now() - t) < timedelta(minutes=15)
-    except:
-        pass
+            return (datetime.now() - t) < timedelta(minutes=20)
+    except: pass
     return True
 
 def coinleri_bul(text):
@@ -149,91 +175,75 @@ def skor_etiketi(s):
 async def ai_analiz(baslik, ozet, coinler):
     coin_text = ", ".join(coinler) if coinler else "Genel Piyasa"
     prompt = f"""
-Sen elit bir kripto hedge-fund analistisin.
-HABER: {baslik}\n{ozet}
+Sen elit bir kripto analistisin. HABER: {baslik}\n{ozet}
 COINLER: {coin_text}
-FORMAT DIŞINA ÇIKMA!
-🔥 Özet: (max 12 kelime)
-💡 Kritik Nokta: (tek cümle)
-🪙 Coin Etkisi:
-- Coin: Bullish/Bearish/Nötr (max 6 kelime)
-🎯 Skor Analizi:
-Skor: -2,-1,0,1,2
-Yorum: Bullish 🚀 / Bearish 🔻 / Nötr ⚖️
-Gerekçe: max 6 kelime
+FORMAT:
+🔥 Özet: (max 10 kelime)
+💡 Kritik: (tek cümle)
+🎯 Skor: (-2 ile 2 arası sadece rakam)
 """
     try:
-        r = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        text = r.text.strip()
-        return "\n".join(text.splitlines()[:12])
-    except Exception as e:
-        return f"AI Hatası: {str(e)}"
+        r = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        return r.text.strip()
+    except: return "AI Analiz Hatası"
 
 async def haberleri_kontrol_et():
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
-            for entry in feed.entries[:3]:
+            for entry in feed.entries[:2]:
                 link = entry.link.strip()
-                if link_var_mi(link): 
-                    continue
-                if not haber_yeni_mi(entry):
+                if link_var_mi(link): continue
+                if not haber_yeni_mi(entry): 
                     link_kaydet(link)
                     continue
 
                 link_kaydet(link)
-                ozet = entry.get("summary", "")[:400]
+                ozet = entry.get("summary", "")[:300]
                 metin = entry.title + " " + ozet
                 coinler = coinleri_bul(metin)
                 ai_text = await ai_analiz(entry.title, ozet, coinler)
                 
+                # Basit skor parse
                 skor_match = re.search(r"Skor:\s*(-?\d)", ai_text)
                 skor = int(skor_match.group(1)) if skor_match else 0
 
                 mesaj = f"""
 📰 <b>{entry.title}</b>
-
-🧠 <b>PİYASA ANALİZİ</b>
-<b>Skor:</b> {skor} | {skor_etiketi(skor)}
+{skor_etiketi(skor)}
 
 {ai_text}
-
-🔗 <a href="{link}">Kaynak</a>
+🔗 <a href="{link}">Haberin Devamı</a>
 """
-                await bot.send_message(
-                    chat_id=KANAL_ID,
-                    text=mesaj,
-                    parse_mode=ParseMode.HTML,
-                    disable_web_page_preview=True
-                )
-                print("✅ Haber Paylaşıldı:", entry.title[:60])
-                await asyncio.sleep(8)
+                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                await asyncio.sleep(5)
         except Exception as e:
             print(f"RSS Hatası: {e}")
 
 # ==========================================
-# 🏁 MAIN
+# 🏁 ANA DÖNGÜ
 # ==========================================
 async def main():
-    global main_loop
-    main_loop = asyncio.get_running_loop() # Thread'lerin erişmesi için loop'u kaydet
-    
     db_baslat()
-    
-    # Flask sunucusunu ayrı bir thread'de başlat
-    flask_thread = threading.Thread(target=run_flask_server)
-    flask_thread.daemon = True # Ana program kapanınca bu da kapansın
-    flask_thread.start()
-    
-    print("🚀 Premium Bot Aktif (Haber + Sinyal)")
+    print("🚀 Bot Aktif! (Hem Haber Hem Teknik Analiz)")
+
+    # Sayaçlar
+    rss_sayac = 0
+    teknik_sayac = 0
 
     while True:
-        print(f"🔄 ({datetime.now().strftime('%H:%M:%S')}) RSS Taraması...")
+        # Her 60 saniyede bir döngü döner
+        
+        # 1. Haberleri Kontrol Et (Her dakika)
         await haberleri_kontrol_et()
-        print("💤 Döngü tamamlandı | 60 sn bekleniyor\n")
+        
+        # 2. Teknik Analiz Yap (Her 15 dakikada bir - 15 * 60sn)
+        # Sürekli analiz yaparsa sunucuyu yorar ve spam yapar.
+        if teknik_sayac % 15 == 0: 
+            await piyasayi_tarama()
+        
+        teknik_sayac += 1
+        print("💤 Bekleniyor... (60sn)")
         await asyncio.sleep(60)
 
 if __name__ == "__main__":
