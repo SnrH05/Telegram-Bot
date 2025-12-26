@@ -185,9 +185,16 @@ async def haberleri_kontrol_et():
 async def main():
     db_baslat()
     print("🚀 Bot aktif (Skor Sistemi ON)")
+
     while True:
-        print("🔄 RSS taranıyor...")
+        # ŞİMDİKİ SAATİ LOGA YAZ
+        print(f"🔄 ({datetime.now().strftime('%H:%M:%S')}) RSS Taraması Başlıyor...")
+
         await haberleri_kontrol_et()
+
+        # TARAMA BİTTİ LOGU
+        print("💤 Tüm kontroller tamamlandı. 60 saniye bekleniyor...\n")
+
         await asyncio.sleep(60)
 
 if __name__ == "__main__":
