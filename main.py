@@ -15,6 +15,18 @@ import pandas as pd
 import mplfinance as mpf
 import io
 
+def atr_hesapla(df, periyot=14):
+    """ATR (Ortalama Gerçek Aralık) Hesaplar"""
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    
+    atr = true_range.rolling(periyot).mean()
+    return atr.iloc[-1]
+
 print("⚙️ Premium Skorlu Analist Botu Başlatılıyor...")
 
 # --- ENV ---
@@ -372,17 +384,17 @@ async def piyasayi_tarama():
 # 📈 BÖLÜM 2: TEKNİK SİNYAL VE GRAFİK (RSI + MACD)
 # ==========================================
 
-def grafik_olustur(coin, df_gelen, macd, signal):
-    """Verilen verilerden TradingView tarzı koyu gri temalı grafik oluşturur"""
+def grafik_olustur(coin, df_gelen, macd, signal, tp_price, sl_price):
+    """Verilen verilerden TP ve SL çizgili grafik oluşturur"""
     try:
-        # HATA ÇÖZÜMÜ: Gelen verinin kopyasını alıyoruz (SettingWithCopyWarning engellemek için)
+        # Verinin kopyasını al
         df = df_gelen.copy()
         
-        # MACD verilerini DataFrame'e ekle
+        # MACD verilerini ekle
         df['MACD'] = macd
         df['Signal'] = signal
         
-        # Ekstra Grafikler - MACD (Pembe) ve Sinyal (Açık Mavi)
+        # MACD Çizgileri
         apds = [
             mpf.make_addplot(df['MACD'], panel=1, color='#ff00ff', title="MACD", width=1.0),
             mpf.make_addplot(df['Signal'], panel=1, color='#00ffff', width=1.0)
@@ -390,7 +402,7 @@ def grafik_olustur(coin, df_gelen, macd, signal):
 
         buf = io.BytesIO()
 
-        # --- TRADINGVIEW TARZI KOYU GRİ TEMA ---
+        # Tema Ayarları
         theme_color = '#131722'
         grid_color = '#363c4e'
         text_color = '#b2b5be'
@@ -402,14 +414,12 @@ def grafik_olustur(coin, df_gelen, macd, signal):
             edgecolor=theme_color,
             gridcolor=grid_color,
             gridstyle=':',
-            rc={                        
-                'axes.labelcolor': text_color, 
-                'xtick.color': text_color,     
-                'ytick.color': text_color,     
-                'text.color': 'white',      
-                'axes.edgecolor': grid_color 
-            }
+            rc={'axes.labelcolor': text_color, 'xtick.color': text_color, 'ytick.color': text_color, 'text.color': 'white', 'axes.edgecolor': grid_color}
         )
+
+        # TP ve SL Çizgileri (Yatay Çizgiler)
+        # hlines: Fiyat seviyeleri, colors: Renkler (Yeşil/Kırmızı), linewidths: Kalınlık
+        h_lines = dict(hlines=[tp_price, sl_price], colors=['#00FF00', '#FF0000'], linewidths=[1.5, 1.5], alpha=0.7)
 
         # Grafik Çizimi
         mpf.plot(
@@ -420,6 +430,7 @@ def grafik_olustur(coin, df_gelen, macd, signal):
             ylabel='Fiyat ($)',
             ylabel_lower='MACD',
             addplot=apds,
+            hlines=h_lines, # <-- Yeni eklenen kısım (TP/SL Çizgileri)
             volume=False,
             panel_ratios=(3, 1),
             savefig=dict(fname=buf, dpi=100, bbox_inches='tight', facecolor=theme_color)
@@ -504,19 +515,18 @@ def rsi_hesapla(fiyatlar, periyot=14):
     return rsi[-1]
 
 async def piyasayi_tarama():
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) Teknik Tarama (Grafikli)...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) Teknik Tarama (ATR Destekli)...")
     for coin in COIN_LIST:
         symbol = f"{coin}/USDT"
         try:
-            # Grafik için daha temiz veriye ihtiyacımız var
             bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100)
             if not bars or len(bars) < 50: continue
 
-            # Numpy Array (Hesaplama için)
+            # Numpy array (Hız için)
             closes = np.array([x[4] for x in bars])
             fiyat = closes[-1]
             
-            # DataFrame (Grafik Çizimi için)
+            # Pandas DataFrame (Grafik ve ATR için)
             df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
             df['date'] = pd.to_datetime(df['date'], unit='ms')
             df.set_index('date', inplace=True)
@@ -524,6 +534,7 @@ async def piyasayi_tarama():
             # --- GÖSTERGELER ---
             guncel_rsi = rsi_hesapla(closes)
             macd_line, signal_line = macd_hesapla(closes)
+            atr_degeri = atr_hesapla(df) # <-- ATR Hesapladık
             
             macd_now = macd_line[-1]
             signal_now = signal_line[-1]
@@ -534,8 +545,10 @@ async def piyasayi_tarama():
             sinyal = None
             sebep = []
             skor = 0
+            tp_fiyat = 0
+            sl_fiyat = 0
 
-            # 1. RSI
+            # RSI ve MACD Kontrolleri
             if guncel_rsi < 30:
                 sebep.append(f"RSI Dipte ({guncel_rsi:.1f})")
                 skor += 1
@@ -543,7 +556,6 @@ async def piyasayi_tarama():
                 sebep.append(f"RSI Tepede ({guncel_rsi:.1f})")
                 skor -= 1
 
-            # 2. MACD
             if macd_prev < signal_prev and macd_now > signal_now:
                 sebep.append("MACD Al Kesişimi")
                 skor += 2
@@ -551,40 +563,56 @@ async def piyasayi_tarama():
                 sebep.append("MACD Sat Kesişimi")
                 skor -= 2
 
-            # KARAR
-            if skor >= 2: sinyal = "🚀 GÜÇLÜ LONG"
-            elif skor == 1: sinyal = "🟢 LONG"
-            elif skor <= -2: sinyal = "🩸 GÜÇLÜ SHORT"
-            elif skor == -1: sinyal = "🔴 SHORT"
+            # KARAR ve TP/SL Hesaplama
+            # Strateji: SL = 2 ATR, TP = 3 ATR (1.5 Risk/Reward Oranı)
+            
+            if skor >= 2: 
+                sinyal = "🚀 GÜÇLÜ LONG"
+                sl_fiyat = fiyat - (atr_degeri * 2.0)
+                tp_fiyat = fiyat + (atr_degeri * 3.0)
+                
+            elif skor == 1: 
+                sinyal = "🟢 LONG"
+                sl_fiyat = fiyat - (atr_degeri * 1.5) # Zayıf sinyalde stop daha yakın
+                tp_fiyat = fiyat + (atr_degeri * 2.5)
+
+            elif skor <= -2: 
+                sinyal = "🩸 GÜÇLÜ SHORT"
+                sl_fiyat = fiyat + (atr_degeri * 2.0)
+                tp_fiyat = fiyat - (atr_degeri * 3.0)
+
+            elif skor == -1: 
+                sinyal = "🔴 SHORT"
+                sl_fiyat = fiyat + (atr_degeri * 1.5)
+                tp_fiyat = fiyat - (atr_degeri * 2.5)
 
             if sinyal:
-                print(f"📸 Grafik oluşturuluyor: {coin}...")
+                print(f"📸 Sinyal ve Grafik: {coin}...")
                 
-                # Grafiği Çiz
-                resim = grafik_olustur(coin, df.tail(60), macd_line[-60:], signal_line[-60:])
+                # Grafiği Çiz (TP ve SL gönderiyoruz)
+                resim = grafik_olustur(coin, df.tail(60), macd_line[-60:], signal_line[-60:], tp_fiyat, sl_fiyat)
                 
                 yorum_metni = " + ".join(sebep)
+                
+                # Mesaj Formatı
                 mesaj = f"""
 🚨 <b>SİNYAL ALINDI</b>
 
 🪙 <b>#{coin}</b>
 📊 <b>Yön:</b> {sinyal}
-💰 <b>Fiyat:</b> ${fiyat}
+💰 <b>Giriş:</b> ${fiyat}
+
+🎯 <b>Hedef (TP):</b> ${tp_fiyat:.4f}
+🛑 <b>Stop (SL):</b> ${sl_fiyat:.4f}
+
 📉 <b>Analiz:</b> {yorum_metni}
 """
-                # Eğer grafik başarıyla çizildiyse FOTOĞRAF olarak at
                 if resim:
-                    await bot.send_photo(
-                        chat_id=KANAL_ID, 
-                        photo=resim, 
-                        caption=mesaj, 
-                        parse_mode=ParseMode.HTML
-                    )
+                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
                 else:
-                    # Grafik çizilemezse normal mesaj at
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                 
-                await asyncio.sleep(2) 
+                await asyncio.sleep(2)
 
         except Exception as e:
             print(f"Hata ({coin}): {e}")
