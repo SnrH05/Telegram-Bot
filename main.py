@@ -372,9 +372,12 @@ async def piyasayi_tarama():
 # 📈 BÖLÜM 2: TEKNİK SİNYAL VE GRAFİK (RSI + MACD)
 # ==========================================
 
-def grafik_olustur(coin, df, macd, signal):
+def grafik_olustur(coin, df_gelen, macd, signal):
     """Verilen verilerden TradingView tarzı koyu gri temalı grafik oluşturur"""
     try:
+        # HATA ÇÖZÜMÜ: Gelen verinin kopyasını alıyoruz (SettingWithCopyWarning engellemek için)
+        df = df_gelen.copy()
+        
         # MACD verilerini DataFrame'e ekle
         df['MACD'] = macd
         df['Signal'] = signal
@@ -388,18 +391,17 @@ def grafik_olustur(coin, df, macd, signal):
         buf = io.BytesIO()
 
         # --- TRADINGVIEW TARZI KOYU GRİ TEMA ---
-        # Renk Kodu: #131722 (Klasik borsa arka plan rengi)
         theme_color = '#131722'
-        grid_color = '#363c4e'  # Izgaralar için daha açık gri
-        text_color = '#b2b5be'  # Göz yormayan kırık beyaz yazı
+        grid_color = '#363c4e'
+        text_color = '#b2b5be'
 
         my_style = mpf.make_mpf_style(
             base_mpf_style='binance', 
-            facecolor=theme_color,      # Grafik iç alanı
-            figcolor=theme_color,       # Resmin çerçeve alanı
-            edgecolor=theme_color,      # Kenarlıklar
-            gridcolor=grid_color,       # Izgara rengi
-            gridstyle=':',              # Noktalı ızgara
+            facecolor=theme_color,
+            figcolor=theme_color,
+            edgecolor=theme_color,
+            gridcolor=grid_color,
+            gridstyle=':',
             rc={                        
                 'axes.labelcolor': text_color, 
                 'xtick.color': text_color,     
@@ -420,7 +422,6 @@ def grafik_olustur(coin, df, macd, signal):
             addplot=apds,
             volume=False,
             panel_ratios=(3, 1),
-            # Kaydederken arka planın gri kalmasını sağlıyoruz
             savefig=dict(fname=buf, dpi=100, bbox_inches='tight', facecolor=theme_color)
         )
         
