@@ -11,6 +11,9 @@ from datetime import datetime, timedelta
 from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
+import pandas as pd
+import mplfinance as mpf
+import io
 
 print("⚙️ Premium Skorlu Analist Botu Başlatılıyor...")
 
@@ -357,6 +360,171 @@ async def piyasayi_tarama():
                 print(f"🔔 Sinyal: {coin} -> {sinyal}")
                 await asyncio.sleep(1) # Spam engellemek için kısa bekleme
                 
+        except Exception as e:
+            print(f"Hata ({coin}): {e}")
+            continue
+
+# ==========================================
+# 📈 BÖLÜM 2: TEKNİK SİNYAL VE GRAFİK (RSI + MACD)
+# ==========================================
+
+def grafik_olustur(coin, df, macd, signal):
+    """Verilen verilerden profesyonel mum grafiği oluşturur"""
+    try:
+        # MACD verilerini DataFrame'e ekle (Çizim için)
+        df['MACD'] = macd
+        df['Signal'] = signal
+        
+        # Ekstra Grafikler (AddPlots) - MACD ve Sinyal çizgisi
+        apds = [
+            mpf.make_addplot(df['MACD'], panel=1, color='fuchsia', title="MACD"),
+            mpf.make_addplot(df['Signal'], panel=1, color='b')
+        ]
+
+        # Resmi belleğe kaydetmek için buffer
+        buf = io.BytesIO()
+
+        # Grafik Stili ve Çizim
+        mpf.plot(
+            df,
+            type='candle',
+            style='binance', # Koyu tema
+            title=f"\n{coin}/USDT - 1H Analiz",
+            ylabel='Fiyat ($)',
+            ylabel_lower='MACD',
+            addplot=apds,
+            volume=False,
+            panel_ratios=(3, 1), # Fiyat grafiği büyük, MACD küçük olsun
+            savefig=dict(fname=buf, dpi=100, bbox_inches='tight')
+        )
+        
+        buf.seek(0) # Dosyanın başına dön
+        return buf
+    except Exception as e:
+        print(f"Grafik Hatası: {e}")
+        return None
+
+def ema_hesapla(values, window):
+    weights = np.exp(np.linspace(-1., 0., window))
+    weights /= weights.sum()
+    alpha = 2 / (window + 1)
+    ema = np.zeros_like(values)
+    ema[0] = values[0]
+    for i in range(1, len(values)):
+        ema[i] = (values[i] * alpha) + (ema[i-1] * (1 - alpha))
+    return ema
+
+def macd_hesapla(fiyatlar):
+    ema12 = ema_hesapla(fiyatlar, 12)
+    ema26 = ema_hesapla(fiyatlar, 26)
+    macd_line = ema12 - ema26
+    signal_line = ema_hesapla(macd_line, 9)
+    return macd_line, signal_line
+
+def rsi_hesapla(fiyatlar, periyot=14):
+    deltalar = np.diff(fiyatlar)
+    seed = deltalar[:periyot+1]
+    up = seed[seed >= 0].sum()/periyot
+    down = -seed[seed < 0].sum()/periyot
+    if down == 0: return 100
+    rs = up/down
+    rsi = np.zeros_like(fiyatlar)
+    rsi[:periyot] = 100. - 100./(1. + rs)
+    for i in range(periyot, len(fiyatlar)):
+        delta = deltalar[i-1]
+        if delta > 0: upval = delta; downval = 0.
+        else: upval = 0.; downval = -delta
+        up = (up * (periyot - 1) + upval) / periyot
+        down = (down * (periyot - 1) + downval) / periyot
+        if down == 0: rsi[i] = 100
+        else:
+            rs = up/down
+            rsi[i] = 100. - 100./(1. + rs)
+    return rsi[-1]
+
+async def piyasayi_tarama():
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) Teknik Tarama (Grafikli)...")
+    for coin in COIN_LIST:
+        symbol = f"{coin}/USDT"
+        try:
+            # Grafik için daha temiz veriye ihtiyacımız var
+            bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100)
+            if not bars or len(bars) < 50: continue
+
+            # Numpy Array (Hesaplama için)
+            closes = np.array([x[4] for x in bars])
+            fiyat = closes[-1]
+            
+            # DataFrame (Grafik Çizimi için)
+            df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+            df['date'] = pd.to_datetime(df['date'], unit='ms')
+            df.set_index('date', inplace=True)
+
+            # --- GÖSTERGELER ---
+            guncel_rsi = rsi_hesapla(closes)
+            macd_line, signal_line = macd_hesapla(closes)
+            
+            macd_now = macd_line[-1]
+            signal_now = signal_line[-1]
+            macd_prev = macd_line[-2]
+            signal_prev = signal_line[-2]
+
+            # --- SİNYAL MANTIĞI ---
+            sinyal = None
+            sebep = []
+            skor = 0
+
+            # 1. RSI
+            if guncel_rsi < 30:
+                sebep.append(f"RSI Dipte ({guncel_rsi:.1f})")
+                skor += 1
+            elif guncel_rsi > 70:
+                sebep.append(f"RSI Tepede ({guncel_rsi:.1f})")
+                skor -= 1
+
+            # 2. MACD
+            if macd_prev < signal_prev and macd_now > signal_now:
+                sebep.append("MACD Al Kesişimi")
+                skor += 2
+            elif macd_prev > signal_prev and macd_now < signal_now:
+                sebep.append("MACD Sat Kesişimi")
+                skor -= 2
+
+            # KARAR
+            if skor >= 2: sinyal = "🚀 GÜÇLÜ LONG"
+            elif skor == 1: sinyal = "🟢 LONG"
+            elif skor <= -2: sinyal = "🩸 GÜÇLÜ SHORT"
+            elif skor == -1: sinyal = "🔴 SHORT"
+
+            if sinyal:
+                print(f"📸 Grafik oluşturuluyor: {coin}...")
+                
+                # Grafiği Çiz
+                resim = grafik_olustur(coin, df.tail(60), macd_line[-60:], signal_line[-60:])
+                
+                yorum_metni = " + ".join(sebep)
+                mesaj = f"""
+🚨 <b>SİNYAL ALINDI</b>
+
+🪙 <b>#{coin}</b>
+📊 <b>Yön:</b> {sinyal}
+💰 <b>Fiyat:</b> ${fiyat}
+📉 <b>Analiz:</b> {yorum_metni}
+"""
+                # Eğer grafik başarıyla çizildiyse FOTOĞRAF olarak at
+                if resim:
+                    await bot.send_photo(
+                        chat_id=KANAL_ID, 
+                        photo=resim, 
+                        caption=mesaj, 
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    # Grafik çizilemezse normal mesaj at
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                
+                await asyncio.sleep(2) 
+
         except Exception as e:
             print(f"Hata ({coin}): {e}")
             continue
