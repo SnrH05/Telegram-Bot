@@ -369,7 +369,60 @@ async def piyasayi_tarama():
 # ==========================================
 
 def grafik_olustur(coin, df, macd, signal):
-    """Verilen verilerden profesyonel mum grafiği oluşturur"""
+    """Verilen verilerden profesyonel mum grafiği oluşturur (TAM SİYAH TEMA)"""
+    try:
+        # MACD verilerini DataFrame'e ekle (Çizim için)
+        df['MACD'] = macd
+        df['Signal'] = signal
+        
+        # Ekstra Grafikler (AddPlots) - MACD ve Sinyal çizgisi
+        # Arka plan siyah olacağı için MACD sinyal çizgisini mavi yerine daha açık bir renk (cyan) yaptım
+        apds = [
+            mpf.make_addplot(df['MACD'], panel=1, color='fuchsia', title="MACD", width=1.2),
+            mpf.make_addplot(df['Signal'], panel=1, color='cyan', width=1.2)
+        ]
+
+        # Resmi belleğe kaydetmek için buffer
+        buf = io.BytesIO()
+
+        # --- ÖZEL SİYAH TEMA TANIMLAMA ---
+        my_style = mpf.make_mpf_style(
+            base_mpf_style='binance', # Mum renkleri için baz al
+            facecolor='#000000',      # Grafik çizim alanı (Plot area)
+            figcolor='#000000',       # Tüm resim arka planı (Figure background)
+            edgecolor='#000000',      # Dış çerçeve rengi
+            gridcolor='#222222',      # Izgara çizgileri (Çok koyu gri)
+            gridstyle=':',            # Izgara stili (Noktalı)
+            rc={                      # Matplotlib temel ayarları (Yazı renkleri için)
+                'axes.labelcolor': 'white', # Eksen başlıkları (Fiyat, Tarih)
+                'xtick.color': 'white',     # Alt eksen sayıları
+                'ytick.color': 'white',     # Yan eksen sayıları
+                'text.color': 'white',      # Ana başlık rengi
+                'axes.edgecolor': '#444444' # Eksen çerçeve çizgisi (Hafif gri)
+            }
+        )
+
+        # Grafik Çizimi
+        mpf.plot(
+            df,
+            type='candle',
+            style=my_style, # <-- Özel siyah stilimizi burada kullanıyoruz
+            title=f"\n{coin}/USDT - 1H Analiz",
+            ylabel='Fiyat ($)',
+            ylabel_lower='MACD',
+            addplot=apds,
+            volume=False,
+            panel_ratios=(3, 1),
+            # Kaydederken de arka planın siyah olmasını garantiye alıyoruz
+            savefig=dict(fname=buf, dpi=100, bbox_inches='tight', facecolor='#000000')
+        )
+        
+        buf.seek(0)
+        return buf
+    except Exception as e:
+        print(f"Grafik Hatası: {e}")
+        return None   
+    
     try:
         # MACD verilerini DataFrame'e ekle (Çizim için)
         df['MACD'] = macd
