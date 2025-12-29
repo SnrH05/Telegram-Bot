@@ -232,6 +232,135 @@ async def piyasayi_tarama():
                 await asyncio.sleep(1)
         except: continue
 
+def ema_hesapla(values, window):
+    """Basit Numpy tabanlı EMA hesaplaması"""
+    weights = np.exp(np.linspace(-1., 0., window))
+    weights /= weights.sum()
+    
+    # Convolution yerine daha geleneksel EMA formülü (daha hassas)
+    alpha = 2 / (window + 1)
+    ema = np.zeros_like(values)
+    ema[0] = values[0]
+    for i in range(1, len(values)):
+        ema[i] = (values[i] * alpha) + (ema[i-1] * (1 - alpha))
+    return ema
+
+def macd_hesapla(fiyatlar):
+    """MACD (12, 26, 9) hesaplar"""
+    # 12 ve 26 periyotluk EMA
+    ema12 = ema_hesapla(fiyatlar, 12)
+    ema26 = ema_hesapla(fiyatlar, 26)
+    
+    # MACD Hattı
+    macd_line = ema12 - ema26
+    
+    # Sinyal Hattı (MACD hattının 9 periyotluk EMA'sı)
+    signal_line = ema_hesapla(macd_line, 9)
+    
+    return macd_line, signal_line
+
+def rsi_hesapla(fiyatlar, periyot=14):
+    deltalar = np.diff(fiyatlar)
+    seed = deltalar[:periyot+1]
+    up = seed[seed >= 0].sum()/periyot
+    down = -seed[seed < 0].sum()/periyot
+    
+    if down == 0: return 100
+    
+    rs = up/down
+    rsi = np.zeros_like(fiyatlar)
+    rsi[:periyot] = 100. - 100./(1. + rs)
+
+    for i in range(periyot, len(fiyatlar)):
+        delta = deltalar[i-1]
+        if delta > 0: upval = delta; downval = 0.
+        else: upval = 0.; downval = -delta
+        
+        up = (up * (periyot - 1) + upval) / periyot
+        down = (down * (periyot - 1) + downval) / periyot
+        
+        if down == 0: rsi[i] = 100
+        else:
+            rs = up/down
+            rsi[i] = 100. - 100./(1. + rs)
+            
+    return rsi[-1]
+
+async def piyasayi_tarama():
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) Teknik Tarama (RSI + MACD)...")
+    for coin in COIN_LIST:
+        symbol = f"{coin}/USDT"
+        try:
+            # MACD için en az 26+9 bar gerekli, garanti olsun diye 100 çekiyoruz
+            bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100)
+            if not bars or len(bars) < 50: continue
+
+            closes = np.array([x[4] for x in bars])
+            fiyat = closes[-1]
+            
+            # --- GÖSTERGE HESAPLAMALARI ---
+            guncel_rsi = rsi_hesapla(closes)
+            macd_line, signal_line = macd_hesapla(closes)
+            
+            # Son iki değer (Kesişim kontrolü için)
+            macd_now = macd_line[-1]
+            signal_now = signal_line[-1]
+            macd_prev = macd_line[-2]
+            signal_prev = signal_line[-2]
+
+            # --- SİNYAL MANTIĞI ---
+            sinyal = None
+            sebep = []
+            skor = 0 # Güç ölçer
+
+            # 1. RSI Kontrolü
+            if guncel_rsi < 30:
+                sebep.append(f"RSI Dipte ({guncel_rsi:.1f})")
+                skor += 1
+            elif guncel_rsi > 70:
+                sebep.append(f"RSI Tepede ({guncel_rsi:.1f})")
+                skor -= 1
+
+            # 2. MACD Kesişim (Crossover) Kontrolü
+            # Bullish Crossover (Alttan yukarı kesişim)
+            if macd_prev < signal_prev and macd_now > signal_now:
+                sebep.append("MACD Al Kesişimi (Golden Cross)")
+                skor += 2 # MACD kesişimi güçlü sinyaldir
+            
+            # Bearish Crossover (Üstten aşağı kesişim)
+            elif macd_prev > signal_prev and macd_now < signal_now:
+                sebep.append("MACD Sat Kesişimi (Death Cross)")
+                skor -= 2
+
+            # --- KARAR MEKANİZMASI ---
+            if skor >= 2:
+                sinyal = "🚀 GÜÇLÜ LONG (AL)"
+            elif skor == 1: # Sadece RSI dipteyse veya zayıf sinyal
+                sinyal = "🟢 LONG (AL)"
+            elif skor <= -2:
+                sinyal = "🩸 GÜÇLÜ SHORT (SAT)"
+            elif skor == -1:
+                sinyal = "🔴 SHORT (SAT)"
+
+            # Sadece bir sinyal varsa gönder
+            if sinyal:
+                yorum_metni = " + ".join(sebep)
+                mesaj = f"""
+🚨 <b>SİNYAL ALINDI</b>
+
+🪙 <b>#{coin}</b>
+📊 <b>Yön:</b> {sinyal}
+💰 <b>Fiyat:</b> ${fiyat}
+📉 <b>Analiz:</b> {yorum_metni}
+"""
+                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                print(f"🔔 Sinyal: {coin} -> {sinyal}")
+                await asyncio.sleep(1) # Spam engellemek için kısa bekleme
+                
+        except Exception as e:
+            print(f"Hata ({coin}): {e}")
+            continue
+
 # ==========================================
 # 🏁 MAIN LOOP
 # ==========================================
