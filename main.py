@@ -368,37 +368,44 @@ async def piyasayi_tarama():
 # 📈 BÖLÜM 2: TEKNİK SİNYAL VE GRAFİK (RSI + MACD)
 # ==========================================
 
+# ==========================================
+# 📈 BÖLÜM 2: TEKNİK SİNYAL VE GRAFİK (RSI + MACD)
+# ==========================================
+
 def grafik_olustur(coin, df, macd, signal):
-    """Verilen verilerden profesyonel mum grafiği oluşturur (TAM SİYAH TEMA)"""
+    """Verilen verilerden TradingView tarzı koyu gri temalı grafik oluşturur"""
     try:
-        # MACD verilerini DataFrame'e ekle (Çizim için)
+        # MACD verilerini DataFrame'e ekle
         df['MACD'] = macd
         df['Signal'] = signal
         
-        # Ekstra Grafikler (AddPlots) - MACD ve Sinyal çizgisi
-        # Arka plan siyah olacağı için MACD sinyal çizgisini mavi yerine daha açık bir renk (cyan) yaptım
+        # Ekstra Grafikler - MACD (Pembe) ve Sinyal (Açık Mavi)
         apds = [
-            mpf.make_addplot(df['MACD'], panel=1, color='fuchsia', title="MACD", width=1.2),
-            mpf.make_addplot(df['Signal'], panel=1, color='cyan', width=1.2)
+            mpf.make_addplot(df['MACD'], panel=1, color='#ff00ff', title="MACD", width=1.0),
+            mpf.make_addplot(df['Signal'], panel=1, color='#00ffff', width=1.0)
         ]
 
-        # Resmi belleğe kaydetmek için buffer
         buf = io.BytesIO()
 
-        # --- ÖZEL SİYAH TEMA TANIMLAMA ---
+        # --- TRADINGVIEW TARZI KOYU GRİ TEMA ---
+        # Renk Kodu: #131722 (Klasik borsa arka plan rengi)
+        theme_color = '#131722'
+        grid_color = '#363c4e'  # Izgaralar için daha açık gri
+        text_color = '#b2b5be'  # Göz yormayan kırık beyaz yazı
+
         my_style = mpf.make_mpf_style(
-            base_mpf_style='binance', # Mum renkleri için baz al
-            facecolor='#000000',      # Grafik çizim alanı (Plot area)
-            figcolor='#000000',       # Tüm resim arka planı (Figure background)
-            edgecolor='#000000',      # Dış çerçeve rengi
-            gridcolor='#222222',      # Izgara çizgileri (Çok koyu gri)
-            gridstyle=':',            # Izgara stili (Noktalı)
-            rc={                      # Matplotlib temel ayarları (Yazı renkleri için)
-                'axes.labelcolor': 'white', # Eksen başlıkları (Fiyat, Tarih)
-                'xtick.color': 'white',     # Alt eksen sayıları
-                'ytick.color': 'white',     # Yan eksen sayıları
-                'text.color': 'white',      # Ana başlık rengi
-                'axes.edgecolor': '#444444' # Eksen çerçeve çizgisi (Hafif gri)
+            base_mpf_style='binance', 
+            facecolor=theme_color,      # Grafik iç alanı
+            figcolor=theme_color,       # Resmin çerçeve alanı
+            edgecolor=theme_color,      # Kenarlıklar
+            gridcolor=grid_color,       # Izgara rengi
+            gridstyle=':',              # Noktalı ızgara
+            rc={                        
+                'axes.labelcolor': text_color, 
+                'xtick.color': text_color,     
+                'ytick.color': text_color,     
+                'text.color': 'white',      
+                'axes.edgecolor': grid_color 
             }
         )
 
@@ -406,22 +413,22 @@ def grafik_olustur(coin, df, macd, signal):
         mpf.plot(
             df,
             type='candle',
-            style=my_style, # <-- Özel siyah stilimizi burada kullanıyoruz
+            style=my_style, 
             title=f"\n{coin}/USDT - 1H Analiz",
             ylabel='Fiyat ($)',
             ylabel_lower='MACD',
             addplot=apds,
             volume=False,
             panel_ratios=(3, 1),
-            # Kaydederken de arka planın siyah olmasını garantiye alıyoruz
-            savefig=dict(fname=buf, dpi=100, bbox_inches='tight', facecolor='#000000')
+            # Kaydederken arka planın gri kalmasını sağlıyoruz
+            savefig=dict(fname=buf, dpi=100, bbox_inches='tight', facecolor=theme_color)
         )
         
         buf.seek(0)
         return buf
     except Exception as e:
         print(f"Grafik Hatası: {e}")
-        return None   
+        return None
     
     try:
         # MACD verilerini DataFrame'e ekle (Çizim için)
