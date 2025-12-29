@@ -5,3 +5,5 @@ google-genai
 feedparser
 flask
 requests
+mplfinance
+pandas
