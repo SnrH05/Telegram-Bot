@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ ULTRA QUANT BOT BAŞLATILIYOR...")
+print("⚙️ ULTRA QUANT SNIPER BOT BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR VE GÜVENLİK
@@ -44,12 +44,15 @@ COIN_LIST = [
     "SUI","APT","ARB","OP", "TIA", "INJ", "RNDR"
 ]
 
-# RSS Haber Kaynakları
 RSS_LIST = [
     "https://cryptonews.com/news/feed/",
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed"
 ]
+
+# 🕒 HAFIZA (COOLDOWN İÇİN)
+# Hangi coine en son ne zaman sinyal atıldığını burada tutacağız
+SON_SINYAL_ZAMANI = {}
 
 # ==========================================
 # 🧮 BÖLÜM 1: FİNANSAL MATEMATİK MOTORU
@@ -174,7 +177,6 @@ def db_baslat():
 def link_kontrol(link):
     conn = sqlite3.connect("haber_hafizasi.db")
     c = conn.cursor()
-    # Kaydetmeye çalış, hata verirse zaten vardır
     try:
         c.execute("INSERT INTO gonderilenler VALUES (?)", (link,))
         conn.commit()
@@ -198,7 +200,6 @@ async def ai_analiz(baslik, ozet):
     try:
         r = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         text = r.text.strip()
-        # Skoru regex ile çek
         skor_match = re.search(r"Skor:\s*(-?\d)", text)
         skor = int(skor_match.group(1)) if skor_match else 0
         return text, skor
@@ -211,16 +212,17 @@ async def haberleri_kontrol_et():
         try:
             feed = feedparser.parse(rss)
             for entry in feed.entries[:2]:
-                if not link_kontrol(entry.link): continue # Zaten veritabanında varsa atla
+                if not link_kontrol(entry.link): continue 
                 
-                # Çok eski haberleri atla (30 dk)
                 if entry.published_parsed:
                     t = datetime.fromtimestamp(time.mktime(entry.published_parsed))
                     if (datetime.now() - t) > timedelta(minutes=30): continue
 
                 ai_text, skor = await ai_analiz(entry.title, entry.get("summary", "")[:300])
                 
-                # Skor emojisi
+                # Sadece önemli haberleri at (Filtre)
+                if skor == 0: continue 
+
                 skor_icon = "🟢" if skor > 0 else "🔴" if skor < 0 else "⚖️"
                 
                 mesaj = f"""
@@ -237,14 +239,26 @@ async def haberleri_kontrol_et():
             print(f"RSS Hatası: {e}")
 
 # ==========================================
-# 🚀 BÖLÜM 4: ANA STRATEJİ DÖNGÜSÜ
+# 🚀 BÖLÜM 4: ANA STRATEJİ DÖNGÜSÜ (SNIPER MODU)
 # ==========================================
 
 async def piyasayi_tarama():
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) PİYASA ANALİZİ BAŞLIYOR...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TEKNİK TARAMA (3dk Periyot)...")
     
+    su_an = datetime.now()
+
     for coin in COIN_LIST:
         symbol = f"{coin}/USDT"
+        
+        # --- 🛡️ SPAM KORUMASI (COOLDOWN: 2 SAAT) ---
+        if coin in SON_SINYAL_ZAMANI:
+            son_atilan_zaman = SON_SINYAL_ZAMANI[coin]
+            gecen_sure = su_an - son_atilan_zaman
+            
+            # Eğer son sinyalden bu yana 2 SAAT geçmediyse analiz etme
+            if gecen_sure < timedelta(hours=2):
+                continue 
+
         try:
             # 1. VERİ ÇEKME
             bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=300)
@@ -254,55 +268,57 @@ async def piyasayi_tarama():
             df['date'] = pd.to_datetime(df['date'], unit='ms')
             df.set_index('date', inplace=True)
 
-            # 2. İNDİKATÖRLER
-            df['ema200'] = calculate_ema(df['close'], 200)
-            df['rsi'] = calculate_rsi(df['close'])
-            df['macd'], df['signal'] = calculate_macd(df['close'])
-            df['adx'] = calculate_adx(df)
-            df['atr'] = calculate_atr(df)
+            # 2. İNDİKATÖRLERİ HESAPLA
+            df['ema200'] = calculate_ema(df['close'], 200) 
+            df['rsi'] = calculate_rsi(df['close'])         
+            df['macd'], df['signal'] = calculate_macd(df['close']) 
+            df['adx'] = calculate_adx(df)                  
+            df['atr'] = calculate_atr(df)                  
 
             curr = df.iloc[-1]
             prev = df.iloc[-2]
             fiyat = curr['close']
             atr = curr['atr']
 
-            # 3. SİNYAL MANTIĞI
+            # 3. QUANT SİNYAL MANTIĞI
             sinyal = None
-            risk_reward = 1.5
+            risk_reward = 1.5 
             setup_reason = ""
 
-            # LONG
+            # --- LONG KURALLARI ---
             if fiyat > curr['ema200'] and curr['adx'] > 20:
                 macd_cross = (prev['macd'] < prev['signal']) and (curr['macd'] > curr['signal'])
                 rsi_bounce = (prev['rsi'] < 40) and (curr['rsi'] > 40)
+                
                 if macd_cross or rsi_bounce:
                     sinyal = "LONG 🟢"
                     stop_loss = fiyat - (atr * 2.0)
                     take_profit = fiyat + (atr * 2.0 * risk_reward)
                     setup_reason = "EMA200 Üstü Trend + Momentum Girişi"
 
-            # SHORT
+            # --- SHORT KURALLARI ---
             elif fiyat < curr['ema200'] and curr['adx'] > 20:
                 macd_cross = (prev['macd'] > prev['signal']) and (curr['macd'] < curr['signal'])
                 rsi_dump = (prev['rsi'] > 60) and (curr['rsi'] < 60)
+                
                 if macd_cross or rsi_dump:
                     sinyal = "SHORT 🔴"
                     stop_loss = fiyat + (atr * 2.0)
                     take_profit = fiyat - (atr * 2.0 * risk_reward)
                     setup_reason = "EMA200 Altı Baskı + Momentum Kaybı"
 
-            # 4. GÖNDERİM
+            # 4. SİNYAL VARSA GÖNDER
             if sinyal:
+                # 🛑 Sinyal saatini kaydet (Cooldown başlasın)
+                SON_SINYAL_ZAMANI[coin] = su_an
+                
                 print(f"🎯 Sinyal Bulundu: {coin} -> {sinyal}")
                 
                 resim = grafik_olustur(coin, df.tail(80), take_profit, stop_loss)
                 
-                # --- AKILLI FORMATLAMA (DÜZELTME BURADA YAPILDI) ---
-                # Eğer fiyat 0.01 dolardan küçükse 8 basamak, değilse 4 basamak göster
-                if fiyat < 0.01:
-                    p_fmt = ".8f" 
-                else:
-                    p_fmt = ".4f"
+                # Akıllı Fiyat Formatı (PEPE vs BTC)
+                if fiyat < 0.01: p_fmt = ".8f"
+                else: p_fmt = ".4f"
 
                 mesaj = f"""
 ⚡ <b>QUANT SİNYAL</b>
@@ -327,27 +343,27 @@ async def piyasayi_tarama():
         except Exception as e:
             print(f"Hata ({coin}): {e}")
             continue
+
 # ==========================================
 # 🏁 MAIN
 # ==========================================
 async def main():
     db_baslat()
-    print("🚀 Bot Tamamen Aktif! (Haber + Teknik Analiz)")
+    print("🚀 Bot Tamamen Aktif! (3 Dakikada bir sessiz tarama modu)")
     
     sayac = 0
     while True:
-        # Her döngüde haber kontrolü (Hızlı aksiyon)
+        # Haberleri kontrol et
         await haberleri_kontrol_et()
         
-        # Her 15 dakikada bir Teknik Analiz (15 x 60sn = 900sn)
-        # Bu, grafiklerin oturmasını bekler ve spamı önler
-        # Test için her dakika çalışsın: (NORMALİ 1 SAAT)
-        if True: 
-            await piyasayi_tarama()
+        # Teknik Analiz (Her döngüde çalışır)
+        await piyasayi_tarama()
         
         sayac += 1
-        print(f"💤 Bekleme... (Döngü: {sayac})")
-        await asyncio.sleep(60) # 1 dakika bekle
+        print(f"💤 Bekleme... (Döngü: {sayac} - Bir sonraki tarama 3dk sonra)")
+        
+        # 3 Dakika Bekle (180 Saniye)
+        await asyncio.sleep(180) 
 
 if __name__ == "__main__":
     asyncio.run(main())
