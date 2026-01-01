@@ -246,66 +246,64 @@ async def piyasayi_tarama():
     for coin in COIN_LIST:
         symbol = f"{coin}/USDT"
         try:
-            # 1. VERİ ÇEKME (EMA 200 için en az 300 mum)
-            bars = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=300) #TEST İÇİN 1 DAKİKDA KONTROL EDİYOR(NORMALİ 1 SAAT)
+            # 1. VERİ ÇEKME
+            bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=300)
             if not bars or len(bars) < 250: continue
 
             df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
             df['date'] = pd.to_datetime(df['date'], unit='ms')
             df.set_index('date', inplace=True)
 
-            # 2. İNDİKATÖRLERİ HESAPLA
-            df['ema200'] = calculate_ema(df['close'], 200) # Ana Trend
-            df['rsi'] = calculate_rsi(df['close'])         # Momentum
-            df['macd'], df['signal'] = calculate_macd(df['close']) # Kesişim
-            df['adx'] = calculate_adx(df)                  # Trend Gücü
-            df['atr'] = calculate_atr(df)                  # Volatilite (Stop için)
+            # 2. İNDİKATÖRLER
+            df['ema200'] = calculate_ema(df['close'], 200)
+            df['rsi'] = calculate_rsi(df['close'])
+            df['macd'], df['signal'] = calculate_macd(df['close'])
+            df['adx'] = calculate_adx(df)
+            df['atr'] = calculate_atr(df)
 
-            # Son Veriler
             curr = df.iloc[-1]
             prev = df.iloc[-2]
             fiyat = curr['close']
             atr = curr['atr']
 
-            # 3. QUANT SİNYAL MANTIĞI
+            # 3. SİNYAL MANTIĞI
             sinyal = None
-            risk_reward = 1.5 # 1 Risk al, 1.5 Kazan
+            risk_reward = 1.5
             setup_reason = ""
 
-            # --- LONG KURALLARI ---
-            # 1. Trend Yukarı (Fiyat > EMA200)
-            # 2. Trend Güçlü (ADX > 20) - Testere piyasasını eler
+            # LONG
             if fiyat > curr['ema200'] and curr['adx'] > 20:
-                # Sinyal: MACD Golden Cross VEYA RSI Oversold Dönüşü
                 macd_cross = (prev['macd'] < prev['signal']) and (curr['macd'] > curr['signal'])
                 rsi_bounce = (prev['rsi'] < 40) and (curr['rsi'] > 40)
-                
                 if macd_cross or rsi_bounce:
                     sinyal = "LONG 🟢"
                     stop_loss = fiyat - (atr * 2.0)
                     take_profit = fiyat + (atr * 2.0 * risk_reward)
                     setup_reason = "EMA200 Üstü Trend + Momentum Girişi"
 
-            # --- SHORT KURALLARI ---
-            # 1. Trend Aşağı (Fiyat < EMA200)
-            # 2. Trend Güçlü (ADX > 20)
+            # SHORT
             elif fiyat < curr['ema200'] and curr['adx'] > 20:
-                # Sinyal: MACD Death Cross VEYA RSI Overbought Dönüşü
                 macd_cross = (prev['macd'] > prev['signal']) and (curr['macd'] < curr['signal'])
                 rsi_dump = (prev['rsi'] > 60) and (curr['rsi'] < 60)
-                
                 if macd_cross or rsi_dump:
                     sinyal = "SHORT 🔴"
                     stop_loss = fiyat + (atr * 2.0)
                     take_profit = fiyat - (atr * 2.0 * risk_reward)
                     setup_reason = "EMA200 Altı Baskı + Momentum Kaybı"
 
-            # 4. SİNYAL VARSA GÖNDER
+            # 4. GÖNDERİM
             if sinyal:
                 print(f"🎯 Sinyal Bulundu: {coin} -> {sinyal}")
                 
                 resim = grafik_olustur(coin, df.tail(80), take_profit, stop_loss)
                 
+                # --- AKILLI FORMATLAMA (DÜZELTME BURADA YAPILDI) ---
+                # Eğer fiyat 0.01 dolardan küçükse 8 basamak, değilse 4 basamak göster
+                if fiyat < 0.01:
+                    p_fmt = ".8f" 
+                else:
+                    p_fmt = ".4f"
+
                 mesaj = f"""
 ⚡ <b>QUANT SİNYAL</b>
 
@@ -313,9 +311,9 @@ async def piyasayi_tarama():
 📊 <b>Yön:</b> {sinyal}
 📉 <b>Setup:</b> {setup_reason}
 
-💰 <b>Giriş:</b> ${fiyat}
-🎯 <b>Hedef:</b> ${take_profit:.4f}
-🛑 <b>Stop:</b> ${stop_loss:.4f}
+💰 <b>Giriş:</b> ${fiyat:{p_fmt}}
+🎯 <b>Hedef:</b> ${take_profit:{p_fmt}}
+🛑 <b>Stop:</b> ${stop_loss:{p_fmt}}
 
 🧠 <i>AI Notu: ADX filtresi {curr['adx']:.1f} puanla trendin güçlü olduğunu teyit etti.</i>
 """
@@ -324,13 +322,11 @@ async def piyasayi_tarama():
                 else:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                 
-                # Aynı coine peş peşe sinyal atmaması için kısa bekleme
                 await asyncio.sleep(2)
 
         except Exception as e:
             print(f"Hata ({coin}): {e}")
             continue
-
 # ==========================================
 # 🏁 MAIN
 # ==========================================
