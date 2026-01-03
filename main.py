@@ -1,7 +1,7 @@
 import feedparser, asyncio, os, sys, sqlite3, time, re, io
 import ccxt, numpy as np, pandas as pd, mplfinance as mpf
 from datetime import datetime, timedelta
-from google import genai
+import google.generativeai as genai
 from telegram.ext import Application
 from telegram.constants import ParseMode
 
