@@ -36,7 +36,6 @@ exchange = ccxt.kucoin({
     'options': {'defaultType': 'spot'} 
 })
 
-# ✅ DÜZELTME 1: RNDR -> RENDER olarak güncellendi (POL zaten doğruydu)
 COIN_LIST = [
     "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
     "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
@@ -73,12 +72,11 @@ def calculate_macd(series):
     signal_line = calculate_ema(macd_line, 9)
     return macd_line, signal_line
 
-# ✅ DÜZELTME 2: Pandas SettingWithCopyWarning hatası giderildi
 def calculate_adx(df, period=14):
     plus_dm = df['high'].diff()
     minus_dm = df['low'].diff()
     
-    # .where ile güvenli atama
+    # Güvenli atama
     plus_dm = plus_dm.where(plus_dm > 0, 0)
     minus_dm = minus_dm.where(minus_dm < 0, 0)
     
@@ -220,7 +218,7 @@ async def haberleri_kontrol_et():
             print(f"RSS Hatası: {e}")
 
 # ==========================================
-# 📊 BÖLÜM 4: VERİTABANI VE RAPORLAMA MODÜLÜ (YENİ)
+# 📊 BÖLÜM 4: VERİTABANI VE RAPORLAMA MODÜLÜ
 # ==========================================
 RAPOR_ZAMANI = datetime.now()
 
@@ -244,49 +242,31 @@ def islem_kaydet(coin, yon, giris, tp1, sl):
     conn.commit()
     conn.close()
 
-# ✅ YENİ: Detaylı Performans Raporu (Bana kopyalayacağın tabloyu bu üretecek)
 def detayli_performans_analizi():
     conn = sqlite3.connect("trade_pnl.db")
     try:
-        # Tüm işlemleri çek
         df = pd.read_sql_query("SELECT * FROM islemler", conn)
-        
         if df.empty:
             print("\n📭 Veritabanı boş, henüz işlem açılmadı.\n")
             return
 
         print("\n" + "="*60)
-        print("📋 DETAYLI İŞLEM GEÇMİŞİ (YAPAY ZEKA ANALİZİ İÇİN)")
+        print("📋 DETAYLI İŞLEM GEÇMİŞİ")
         print("="*60)
         
-        # Pandas tablosunu string olarak bas (Terminalde düzgün görünür)
-        # Sütunları seçiyoruz ki gereksiz id vs kalabalık etmesin
         ozet_df = df[['coin', 'yon', 'giris_fiyat', 'durum', 'pnl_yuzde', 'kapanis_zamani']]
         print(ozet_df.to_string(index=False))
-        
         print("-" * 60)
         
-        # İstatistikler
-        toplam_islem = len(df)
         biten_islemler = df[df['durum'] != 'ACIK']
         kazanan = len(biten_islemler[biten_islemler['durum'] == 'KAZANDI'])
         kaybeden = len(biten_islemler[biten_islemler['durum'] == 'KAYBETTI'])
         
-        if len(biten_islemler) > 0:
-            win_rate = (kazanan / len(biten_islemler)) * 100
-        else:
-            win_rate = 0.0
-            
+        win_rate = (kazanan / len(biten_islemler)) * 100 if len(biten_islemler) > 0 else 0.0
         toplam_pnl = biten_islemler['pnl_yuzde'].sum()
         
-        print(f"📊 İSTATİSTİKLER:")
-        print(f"🔹 Toplam İşlem: {toplam_islem}")
-        print(f"✅ Kazanan: {kazanan}")
-        print(f"❌ Kaybeden: {kaybeden}")
-        print(f"📈 Win Rate: %{win_rate:.2f}")
-        print(f"💰 Net PnL: %{toplam_pnl:.2f}")
+        print(f"📊 İSTATİSTİKLER: Win Rate: %{win_rate:.2f} | Net PnL: %{toplam_pnl:.2f}")
         print("="*60 + "\n")
-        
     except Exception as e:
         print(f"Raporlama hatası: {e}")
     finally:
@@ -323,19 +303,31 @@ async def islemleri_kontrol_et():
                 conn.commit()
                 conn.close()
                 await bot.send_message(chat_id=KANAL_ID, text=f"{'✅' if sonuc=='KAZANDI' else '❌'} <b>İŞLEM SONUCU:</b> #{coin}\n<b>Durum:</b> {sonuc} (%{pnl:.2f})", parse_mode=ParseMode.HTML)
-                
-                # İşlem bitince konsola da raporu bas
                 detayli_performans_analizi()
-                
         except: continue
 
 # ==========================================
-# 🚀 BÖLÜM 5: TEKNİK ANALİZ (DÜZELTİLMİŞ)
+# 🚀 BÖLÜM 5: TEKNİK ANALİZ (BTC FİLTRELİ)
 # ==========================================
 
 async def piyasayi_tarama():
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TEKNİK TARAMA (3dk)...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TEKNİK TARAMA (BTC FİLTRELİ)...")
     su_an = datetime.now()
+
+    # --- 🟢 YENİ: BTC GENEL PİYASA ANALİZİ ---
+    btc_trend = "NEUTRAL"
+    try:
+        btc_bars = exchange.fetch_ohlcv('BTC/USDT', timeframe='1h', limit=250)
+        btc_df = pd.DataFrame(btc_bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        btc_ema200 = calculate_ema(btc_df['close'], 200).iloc[-1]
+        btc_price = btc_df['close'].iloc[-1]
+        
+        # Piyasa Yönünü Belirle
+        btc_trend = "BULL" if btc_price > btc_ema200 else "BEAR"
+        print(f"🦁 BTC PİYASA YÖNÜ: {btc_trend} (Fiyat: {btc_price:.2f} | EMA200: {btc_ema200:.2f})")
+    except Exception as e:
+        print(f"⚠️ BTC Piyasa Analizi Başarısız: {e}")
+    # ----------------------------------------
 
     for coin in COIN_LIST:
         symbol = f"{coin}/USDT"
@@ -374,12 +366,11 @@ async def piyasayi_tarama():
             dirence_yakinlik = (r1 - fiyat) / fiyat
             destege_yakinlik = (fiyat - s1) / fiyat
             
-            # --- LONG ---
+            # --- LONG SİNYAL MANTIĞI ---
             if (fiyat > curr['ema200']) and (curr['adx'] > 20):
                 if dirence_yakinlik > 0.005: 
                     macd_cross = (prev['macd'] < prev['signal']) and (curr['macd'] > curr['signal'])
                     rsi_bounce = (prev['rsi'] < 40) and (curr['rsi'] > 40)
-                    
                     if (macd_cross or rsi_bounce) and hacim_teyidi:
                         sinyal = "LONG 🟢"
                         setup_reason = "Trend + Hacim + Pivot Onayı"
@@ -388,12 +379,11 @@ async def piyasayi_tarama():
                         tp2 = fiyat + (atr * 3.0)
                         tp3 = fiyat + (atr * 6.0)
 
-            # --- SHORT ---
+            # --- SHORT SİNYAL MANTIĞI ---
             elif (fiyat < curr['ema200']) and (curr['adx'] > 20):
                 if destege_yakinlik > 0.005:
                     macd_cross = (prev['macd'] > prev['signal']) and (curr['macd'] < curr['signal'])
                     rsi_dump = (prev['rsi'] > 60) and (curr['rsi'] < 60)
-                    
                     if (macd_cross or rsi_dump) and hacim_teyidi:
                         sinyal = "SHORT 🔴"
                         setup_reason = "Baskı + Hacim + Pivot Onayı"
@@ -402,11 +392,21 @@ async def piyasayi_tarama():
                         tp2 = fiyat - (atr * 3.0)
                         tp3 = fiyat - (atr * 6.0)
 
+            # --- 🟢 YENİ: BTC FİLTRESİ UYGULAMA ---
+            if sinyal:
+                if "LONG" in sinyal and btc_trend == "BEAR":
+                    print(f"🚫 {coin} LONG iptal edildi (BTC Düşüş Trendinde)")
+                    sinyal = None
+                elif "SHORT" in sinyal and btc_trend == "BULL":
+                    print(f"🚫 {coin} SHORT iptal edildi (BTC Yükseliş Trendinde)")
+                    sinyal = None
+            # --------------------------------------
+
             if sinyal:
                 SON_SINYAL_ZAMANI[coin] = su_an
                 yon_str = "LONG" if "LONG" in sinyal else "SHORT"
                 islem_kaydet(coin, yon_str, fiyat, tp1, stop_loss)
-                print(f"🎯 Sinyal Bulundu: {coin} -> {sinyal}")
+                print(f"🎯 Sinyal Onaylandı: {coin} -> {sinyal}")
                 
                 resim = grafik_olustur(coin, df.tail(80), tp1, tp2, tp3, stop_loss, pivot, r1, s1)
                 p_fmt = ".8f" if fiyat < 0.01 else ".4f"
@@ -424,6 +424,7 @@ async def piyasayi_tarama():
 3️⃣ <b>TP3:</b> ${tp3:{p_fmt}}
 🛑 <b>Stop Loss:</b> ${stop_loss:{p_fmt}}
 
+🦁 <b>Piyasa Durumu:</b> BTC {btc_trend}
 🧱 <b>Pivot:</b> R1: ${r1:{p_fmt}} | S1: ${s1:{p_fmt}}
 🧠 <i>ADX: {curr['adx']:.1f}</i>
 """
@@ -446,9 +447,7 @@ async def main():
     pnl_db_baslat()
     global RAPOR_ZAMANI
     
-    print("🚀 Bot Tamamen Aktif! (Haber, Multi-TP ve Pivot Korumalı)")
-    
-    # Başlarken önceki performansı göster
+    print("🚀 Bot Tamamen Aktif! (Haber + Multi-TP + Pivot + BTC Filtreli)")
     detayli_performans_analizi()
     
     sayac = 0
@@ -458,8 +457,6 @@ async def main():
         await islemleri_kontrol_et()
         
         if (datetime.now() - RAPOR_ZAMANI) > timedelta(hours=24):
-             # Günlük Telegram Raporu (Mevcut kodunda vardı, onu çağırır)
-             # Burada ek olarak terminale detaylı dökelim
              detayli_performans_analizi()
              RAPOR_ZAMANI = datetime.now()
         
