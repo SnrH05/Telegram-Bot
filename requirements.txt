@@ -4,6 +4,5 @@ feedparser
 numpy
 pandas
 mplfinance
-google-generativeai
-
+google-genai
 
