@@ -39,7 +39,7 @@ exchange = ccxt.kucoin({
 COIN_LIST = [
     "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
     "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
-    "SUI","APT","ARB","OP", "TIA", "INJ", "RNDR"
+    "SUI","APT","ARB","OP", "TIA", "INJ", "RENDER"
 ]
 
 RSS_LIST = [
