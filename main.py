@@ -344,6 +344,13 @@ async def piyasayi_tarama():
             # 4. SİNYAL GÖNDERİMİ
             if sinyal:
                 SON_SINYAL_ZAMANI[coin] = su_an
+                
+                # 🟢 BURAYI EKLE: ---------------------------
+                yon_str = "LONG" if "LONG" in sinyal else "SHORT"
+                # Veritabanına kaydet
+                islem_kaydet(coin, yon_str, fiyat, tp1, stop_loss)
+                # -------------------------------------------
+
                 print(f"🎯 Sinyal Bulundu: {coin} -> {sinyal}")
                 
                 # Grafiğe Pivot verilerini de gönderiyoruz
@@ -353,6 +360,7 @@ async def piyasayi_tarama():
                 else: p_fmt = ".4f"
 
                 mesaj = f"""
+                
 ⚡ <b>QUANT VIP SİNYAL</b>
 
 🪙 <b>#{coin}</b>
@@ -385,22 +393,112 @@ Destek (S1): ${s1:{p_fmt}}
         except Exception as e:
             print(f"Hata ({coin}): {e}")
             continue
+# ==========================================
+# 📊 EK MODÜL: PNL TAKİP VE RAPORLAMA
+# ==========================================
+RAPOR_ZAMANI = datetime.now()
+
+def pnl_db_baslat():
+    conn = sqlite3.connect("trade_pnl.db")
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS islemler (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        coin TEXT, yon TEXT, giris_fiyat REAL, tp1 REAL, sl REAL,
+        durum TEXT DEFAULT 'ACIK', pnl_yuzde REAL DEFAULT 0,
+        kapanis_zamani DATETIME
+    )""")
+    conn.commit()
+    conn.close()
+
+def islem_kaydet(coin, yon, giris, tp1, sl):
+    conn = sqlite3.connect("trade_pnl.db")
+    c = conn.cursor()
+    c.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp1, sl) VALUES (?, ?, ?, ?, ?)", 
+              (coin, yon, giris, tp1, sl))
+    conn.commit()
+    conn.close()
+
+async def islemleri_kontrol_et():
+    conn = sqlite3.connect("trade_pnl.db")
+    c = conn.cursor()
+    c.execute("SELECT id, coin, yon, giris_fiyat, tp1, sl FROM islemler WHERE durum='ACIK'")
+    acik_islemler = c.fetchall()
+    conn.close()
+    
+    if not acik_islemler: return
+
+    for islem in acik_islemler:
+        id, coin, yon, giris, tp1, sl = islem
+        try:
+            ticker = exchange.fetch_ticker(f"{coin}/USDT")
+            fiyat = ticker['last']
+            sonuc, pnl = None, 0
+
+            if yon == "LONG":
+                if fiyat >= tp1: sonuc, pnl = "KAZANDI", ((tp1-giris)/giris)*100
+                elif fiyat <= sl: sonuc, pnl = "KAYBETTI", ((sl-giris)/giris)*100
+            elif yon == "SHORT":
+                if fiyat <= tp1: sonuc, pnl = "KAZANDI", ((giris-tp1)/giris)*100
+                elif fiyat >= sl: sonuc, pnl = "KAYBETTI", ((giris-sl)/giris)*100
+
+            if sonuc:
+                conn = sqlite3.connect("trade_pnl.db")
+                c = conn.cursor()
+                c.execute("UPDATE islemler SET durum=?, pnl_yuzde=?, kapanis_zamani=? WHERE id=?", 
+                          (sonuc, pnl, datetime.now(), id))
+                conn.commit()
+                conn.close()
+                await bot.send_message(chat_id=KANAL_ID, text=f"{'✅' if sonuc=='KAZANDI' else '❌'} <b>İŞLEM SONUCU:</b> #{coin}\n<b>Durum:</b> {sonuc} (%{pnl:.2f})", parse_mode=ParseMode.HTML)
+        except: continue
+
+async def gunluk_rapor_gonder():
+    conn = sqlite3.connect("trade_pnl.db")
+    c = conn.cursor()
+    dunku_zaman = datetime.now() - timedelta(hours=24)
+    c.execute("SELECT durum, pnl_yuzde FROM islemler WHERE kapanis_zamani > ?", (dunku_zaman,))
+    islemler = c.fetchall()
+    conn.close()
+
+    if not islemler: return
+    
+    kazanan = len([x for x in islemler if x[0] == 'KAZANDI'])
+    kaybeden = len([x for x in islemler if x[0] == 'KAYBETTI'])
+    toplam_pnl = sum([x[1] for x in islemler])
+    
+    rapor = f"📊 <b>GÜNLÜK RAPOR</b>\n✅ {kazanan} Kazanç | ❌ {kaybeden} Kayıp\n💰 <b>Net PnL: %{toplam_pnl:.2f}</b>"
+    await bot.send_message(chat_id=KANAL_ID, text=rapor, parse_mode=ParseMode.HTML)
+
 
 # ==========================================
 # 🏁 MAIN
 # ==========================================
 async def main():
     db_baslat()
-    print("🚀 Bot Aktif! (Haber, Multi-TP ve Pivot Korumalı)")
+    
+    # 🟢 BURAYI EKLE (Veritabanını Başlat) ---------
+    pnl_db_baslat()
+    global RAPOR_ZAMANI
+    # ----------------------------------------------
+    
+    print("🚀 Bot Tamamen Aktif! (Haber, Multi-TP ve Pivot Korumalı)")
     
     sayac = 0
     while True:
         await haberleri_kontrol_et()
         await piyasayi_tarama()
         
+        # 🟢 BURAYI EKLE (Takip Sistemi ve Rapor) ----
+        await islemleri_kontrol_et()
+        
+        # 24 Saat geçtiyse rapor at
+        if (datetime.now() - RAPOR_ZAMANI) > timedelta(hours=24):
+             await gunluk_rapor_gonder()
+             RAPOR_ZAMANI = datetime.now()
+        # --------------------------------------------
+        
         sayac += 1
         print(f"💤 Bekleme... (Döngü: {sayac} - Sonraki Tarama 3dk)")
-        await asyncio.sleep(180) 
+        await asyncio.sleep(180)
 
 if __name__ == "__main__":
     asyncio.run(main())
