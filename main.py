@@ -1,471 +1,158 @@
-import feedparser
-import asyncio
-import os
-import sys
-import sqlite3
-import time
-import re
-import ccxt
-import numpy as np
-import pandas as pd
-import mplfinance as mpf
-import io
+import feedparser, asyncio, os, sys, sqlite3, time, re, io
+import ccxt, numpy as np, pandas as pd, mplfinance as mpf
 from datetime import datetime, timedelta
 from google import genai
-from telegram import Bot
+from telegram.ext import Application
 from telegram.constants import ParseMode
 
 print("⚙️ ULTRA QUANT PIVOT MASTER BOT BAŞLATILIYOR...")
 
-# ==========================================
-# 🔧 AYARLAR VE GÜVENLİK
-# ==========================================
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
+# ===================== ENV =====================
+TOKEN = os.getenv("BOT_TOKEN", "")
 KANAL_ID = int(os.getenv("KANAL_ID", "0"))
-GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
-
+GEMINI_KEY = os.getenv("GEMINI_KEY", "")
 if not TOKEN or not GEMINI_KEY or not KANAL_ID:
-    print("❌ HATA: ENV bilgileri eksik! Railway Variables kısmını kontrol et.")
-    sys.exit(1)
+    sys.exit("❌ ENV eksik")
 
-client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
-bot = Bot(token=TOKEN)
+client = genai.Client(api_key=GEMINI_KEY)
+application = Application.builder().token(TOKEN).build()
 
-exchange = ccxt.kucoin({
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'} 
-})
+exchange = ccxt.kucoin({'enableRateLimit': True})
 
-# ✅ DÜZELTME 1: RNDR -> RENDER olarak güncellendi (POL zaten doğruydu)
-COIN_LIST = [
-    "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
-    "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
-    "SUI","APT","ARB","OP", "TIA", "INJ", "RENDER"
-]
+COIN_LIST = ["BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE","TON","LINK","DOT","POL","LTC","BCH","PEPE","FET","SUI","APT","ARB","OP","TIA","INJ","RENDER"]
+RSS_LIST = ["https://cryptonews.com/news/feed/","https://cointelegraph.com/rss","https://decrypt.co/feed"]
 
-RSS_LIST = [
-    "https://cryptonews.com/news/feed/",
-    "https://cointelegraph.com/rss",
-    "https://decrypt.co/feed"
-]
+SON_SINYAL = {}
 
-# 🕒 HAFIZA
-SON_SINYAL_ZAMANI = {}
-
-# ==========================================
-# 🧮 BÖLÜM 1: İNDİKATÖRLER VE PIVOTLAR
-# ==========================================
-
-def calculate_ema(series, span):
-    return series.ewm(span=span, adjust=False).mean()
-
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_macd(series):
-    exp1 = calculate_ema(series, 12)
-    exp2 = calculate_ema(series, 26)
-    macd_line = exp1 - exp2
-    signal_line = calculate_ema(macd_line, 9)
-    return macd_line, signal_line
-
-# ✅ DÜZELTME 2: Pandas SettingWithCopyWarning hatası giderildi
-def calculate_adx(df, period=14):
-    plus_dm = df['high'].diff()
-    minus_dm = df['low'].diff()
-    
-    # .where ile güvenli atama
-    plus_dm = plus_dm.where(plus_dm > 0, 0)
-    minus_dm = minus_dm.where(minus_dm < 0, 0)
-    
-    tr1 = pd.DataFrame(df['high'] - df['low'])
-    tr2 = pd.DataFrame(abs(df['high'] - df['close'].shift(1)))
-    tr3 = pd.DataFrame(abs(df['low'] - df['close'].shift(1)))
-    frames = [tr1, tr2, tr3]
-    tr = pd.concat(frames, axis=1, join='inner').max(axis=1)
-    atr = tr.rolling(period).mean()
-    plus_di = 100 * (plus_dm.ewm(alpha=1/period).mean() / atr)
-    minus_di = 100 * (abs(minus_dm).ewm(alpha=1/period).mean() / atr)
-    dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
-    adx = dx.ewm(alpha=1/period).mean()
-    return adx
-
-def calculate_atr(df, period=14):
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    return true_range.rolling(period).mean()
-
-def calculate_pivots(df_hourly):
-    try:
-        df_daily = df_hourly.resample('D').agg({
-            'high': 'max',
-            'low': 'min',
-            'close': 'last'
-        })
-        last_day = df_daily.iloc[-2]
-        high = last_day['high']
-        low = last_day['low']
-        close = last_day['close']
-        pivot = (high + low + close) / 3
-        r1 = (2 * pivot) - low  
-        s1 = (2 * pivot) - high 
-        return pivot, r1, s1
-    except:
-        return 0, 0, 0
-
-# ==========================================
-# 🎨 BÖLÜM 2: GRAFİK OLUŞTURUCU
-# ==========================================
-
-def grafik_olustur(coin, df_gelen, tp1, tp2, tp3, sl_price, pivot, r1, s1):
-    try:
-        df = df_gelen.copy()
-        apds = [
-            mpf.make_addplot(df['macd'], panel=1, color='#2962FF', title="MACD", width=1.0),
-            mpf.make_addplot(df['signal'], panel=1, color='#FF6D00', width=1.0),
-            mpf.make_addplot(df['ema200'], panel=0, color='white', width=0.8, linestyle='--')
-        ]
-        buf = io.BytesIO()
-        theme_color = '#131722'
-        grid_color = '#363c4e'
-        text_color = '#b2b5be'
-        my_style = mpf.make_mpf_style(
-            base_mpf_style='binance',
-            facecolor=theme_color,
-            figcolor=theme_color,
-            edgecolor=theme_color,
-            gridcolor=grid_color,
-            gridstyle=':',
-            rc={'axes.labelcolor': text_color, 'xtick.color': text_color, 'ytick.color': text_color, 'text.color': text_color}
-        )
-        h_lines = dict(
-            hlines=[tp1, tp2, tp3, sl_price, pivot, r1, s1], 
-            colors=['#98FB98', '#32CD32', '#006400', '#FF0000', '#FFFF00', '#FF4500', '#00BFFF'],
-            linewidths=[1.0, 1.2, 1.5, 1.5, 0.8, 0.8, 0.8], 
-            alpha=0.8, 
-            linestyle='-.'
-        )
-        mpf.plot(
-            df, type='candle', style=my_style,
-            title=f"\n{coin}/USDT - Pivot & TP Analiz",
-            ylabel='Fiyat ($)', ylabel_lower='MACD',
-            addplot=apds, hlines=h_lines, volume=False,
-            panel_ratios=(3, 1),
-            savefig=dict(fname=buf, dpi=120, bbox_inches='tight', facecolor=theme_color)
-        )
-        buf.seek(0)
-        return buf
-    except Exception as e:
-        print(f"Grafik Hatası: {e}")
-        return None
-
-# ==========================================
-# 🧠 BÖLÜM 3: YAPAY ZEKA VE HABERLER
-# ==========================================
-
-def db_baslat():
-    conn = sqlite3.connect("haber_hafizasi.db")
+# ===================== DB =====================
+def db_init():
+    conn = sqlite3.connect("trade.db")
     c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS gonderilenler (link TEXT PRIMARY KEY)")
-    conn.commit()
-    conn.close()
-
-def link_kontrol(link):
-    conn = sqlite3.connect("haber_hafizasi.db")
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO gonderilenler VALUES (?)", (link,))
-        conn.commit()
-        yeni_mi = True
-    except sqlite3.IntegrityError:
-        yeni_mi = False
-    conn.close()
-    return yeni_mi
-
-async def ai_analiz(baslik, ozet):
-    prompt = f"Analist sensin. Haberi yorumla.\nHABER: {baslik}\n{ozet}\nÇıktı Formatı:\n🔥 Özet: [Kısa cümle]\n🎯 Skor: [ -2 (Çok Kötü) ile 2 (Çok İyi) arası tam sayı]"
-    try:
-        r = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-        text = r.text.strip()
-        skor_match = re.search(r"Skor:\s*(-?\d)", text)
-        skor = int(skor_match.group(1)) if skor_match else 0
-        return text, skor
-    except:
-        return "🔥 Özet: Analiz edilemedi.", 0
-
-async def haberleri_kontrol_et():
-    print("📰 Haberler taranıyor...")
-    for rss in RSS_LIST:
-        try:
-            feed = feedparser.parse(rss)
-            for entry in feed.entries[:2]:
-                if not link_kontrol(entry.link): continue 
-                if entry.published_parsed:
-                    t = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-                    if (datetime.now() - t) > timedelta(minutes=30): continue
-                ai_text, skor = await ai_analiz(entry.title, entry.get("summary", "")[:300])
-                if abs(skor) < 2: continue 
-                skor_icon = "🟢" if skor > 0 else "🔴" if skor < 0 else "⚖️"
-                mesaj = f"📰 <b>{entry.title}</b>\n\n{ai_text}\n\n📊 <b>Etki:</b> {skor} {skor_icon}\n🔗 <a href='{entry.link}'>Haberi Oku</a>"
-                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-                await asyncio.sleep(5)
-        except Exception as e:
-            print(f"RSS Hatası: {e}")
-
-# ==========================================
-# 📊 BÖLÜM 4: VERİTABANI VE RAPORLAMA MODÜLÜ (YENİ)
-# ==========================================
-RAPOR_ZAMANI = datetime.now()
-
-def pnl_db_baslat():
-    conn = sqlite3.connect("trade_pnl.db")
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS islemler (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        coin TEXT, yon TEXT, giris_fiyat REAL, tp1 REAL, sl REAL,
-        durum TEXT DEFAULT 'ACIK', pnl_yuzde REAL DEFAULT 0,
-        kapanis_zamani DATETIME
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS trades(
+        id INTEGER PRIMARY KEY,
+        coin TEXT, yon TEXT,
+        giris REAL, tp1 REAL, tp2 REAL, tp3 REAL, sl REAL,
+        kalan REAL DEFAULT 1.0,
+        durum TEXT DEFAULT 'ACIK',
+        pnl REAL DEFAULT 0,
+        zaman DATETIME
     )""")
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
-def islem_kaydet(coin, yon, giris, tp1, sl):
-    conn = sqlite3.connect("trade_pnl.db")
-    c = conn.cursor()
-    c.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp1, sl) VALUES (?, ?, ?, ?, ?)", 
-              (coin, yon, giris, tp1, sl))
-    conn.commit()
-    conn.close()
+# ===================== INDICATORS =====================
+def ema(s, n): return s.ewm(span=n).mean()
 
-# ✅ YENİ: Detaylı Performans Raporu (Bana kopyalayacağın tabloyu bu üretecek)
-def detayli_performans_analizi():
-    conn = sqlite3.connect("trade_pnl.db")
-    try:
-        # Tüm işlemleri çek
-        df = pd.read_sql_query("SELECT * FROM islemler", conn)
-        
-        if df.empty:
-            print("\n📭 Veritabanı boş, henüz işlem açılmadı.\n")
-            return
+def rsi(s, n=14):
+    d = s.diff()
+    g = d.clip(lower=0).rolling(n).mean()
+    l = -d.clip(upper=0).rolling(n).mean()
+    rs = g/l
+    return 100 - (100/(1+rs))
 
-        print("\n" + "="*60)
-        print("📋 DETAYLI İŞLEM GEÇMİŞİ (YAPAY ZEKA ANALİZİ İÇİN)")
-        print("="*60)
-        
-        # Pandas tablosunu string olarak bas (Terminalde düzgün görünür)
-        # Sütunları seçiyoruz ki gereksiz id vs kalabalık etmesin
-        ozet_df = df[['coin', 'yon', 'giris_fiyat', 'durum', 'pnl_yuzde', 'kapanis_zamani']]
-        print(ozet_df.to_string(index=False))
-        
-        print("-" * 60)
-        
-        # İstatistikler
-        toplam_islem = len(df)
-        biten_islemler = df[df['durum'] != 'ACIK']
-        kazanan = len(biten_islemler[biten_islemler['durum'] == 'KAZANDI'])
-        kaybeden = len(biten_islemler[biten_islemler['durum'] == 'KAYBETTI'])
-        
-        if len(biten_islemler) > 0:
-            win_rate = (kazanan / len(biten_islemler)) * 100
-        else:
-            win_rate = 0.0
-            
-        toplam_pnl = biten_islemler['pnl_yuzde'].sum()
-        
-        print(f"📊 İSTATİSTİKLER:")
-        print(f"🔹 Toplam İşlem: {toplam_islem}")
-        print(f"✅ Kazanan: {kazanan}")
-        print(f"❌ Kaybeden: {kaybeden}")
-        print(f"📈 Win Rate: %{win_rate:.2f}")
-        print(f"💰 Net PnL: %{toplam_pnl:.2f}")
-        print("="*60 + "\n")
-        
-    except Exception as e:
-        print(f"Raporlama hatası: {e}")
-    finally:
-        conn.close()
+def macd(s):
+    m = ema(s,12)-ema(s,26)
+    return m, ema(m,9)
 
-async def islemleri_kontrol_et():
-    conn = sqlite3.connect("trade_pnl.db")
-    c = conn.cursor()
-    c.execute("SELECT id, coin, yon, giris_fiyat, tp1, sl FROM islemler WHERE durum='ACIK'")
-    acik_islemler = c.fetchall()
-    conn.close()
-    
-    if not acik_islemler: return
+def adx(df, n=14):
+    up = df['high'].diff()
+    dn = -df['low'].diff()
+    up = up.where((up > dn) & (up > 0), 0)
+    dn = dn.where((dn > up) & (dn > 0), 0)
+    tr = pd.concat([
+        df['high']-df['low'],
+        (df['high']-df['close'].shift()).abs(),
+        (df['low']-df['close'].shift()).abs()
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(n).mean()
+    pdi = 100 * (up.ewm(alpha=1/n).mean()/atr)
+    mdi = 100 * (dn.ewm(alpha=1/n).mean()/atr)
+    dx = (abs(pdi-mdi)/(pdi+mdi))*100
+    return dx.ewm(alpha=1/n).mean()
 
-    for islem in acik_islemler:
-        id, coin, yon, giris, tp1, sl = islem
-        try:
-            ticker = exchange.fetch_ticker(f"{coin}/USDT")
-            fiyat = ticker['last']
-            sonuc, pnl = None, 0
+# ===================== GRAPH =====================
+def grafik(df, coin, tp1,tp2,tp3,sl):
+    buf = io.BytesIO()
+    df = df.tail(80)
+    ap = [mpf.make_addplot(df['ema200'], color='white')]
+    mpf.plot(df,type='candle',addplot=ap,
+        hlines=dict(hlines=[tp1,tp2,tp3,sl]),
+        savefig=buf)
+    buf.seek(0)
+    return buf.read()
 
-            if yon == "LONG":
-                if fiyat >= tp1: sonuc, pnl = "KAZANDI", ((tp1-giris)/giris)*100
-                elif fiyat <= sl: sonuc, pnl = "KAYBETTI", ((sl-giris)/giris)*100
-            elif yon == "SHORT":
-                if fiyat <= tp1: sonuc, pnl = "KAZANDI", ((giris-tp1)/giris)*100
-                elif fiyat >= sl: sonuc, pnl = "KAYBETTI", ((giris-sl)/giris)*100
-
-            if sonuc:
-                conn = sqlite3.connect("trade_pnl.db")
-                c = conn.cursor()
-                c.execute("UPDATE islemler SET durum=?, pnl_yuzde=?, kapanis_zamani=? WHERE id=?", 
-                          (sonuc, pnl, datetime.now(), id))
-                conn.commit()
-                conn.close()
-                await bot.send_message(chat_id=KANAL_ID, text=f"{'✅' if sonuc=='KAZANDI' else '❌'} <b>İŞLEM SONUCU:</b> #{coin}\n<b>Durum:</b> {sonuc} (%{pnl:.2f})", parse_mode=ParseMode.HTML)
-                
-                # İşlem bitince konsola da raporu bas
-                detayli_performans_analizi()
-                
-        except: continue
-
-# ==========================================
-# 🚀 BÖLÜM 5: TEKNİK ANALİZ (DÜZELTİLMİŞ)
-# ==========================================
-
-async def piyasayi_tarama():
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TEKNİK TARAMA (3dk)...")
-    su_an = datetime.now()
-
+# ===================== SIGNAL =====================
+async def scan():
     for coin in COIN_LIST:
-        symbol = f"{coin}/USDT"
-        if coin in SON_SINYAL_ZAMANI:
-            if (su_an - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2): continue 
-
+        if coin in SON_SINYAL and datetime.now()-SON_SINYAL[coin]<timedelta(hours=2): continue
         try:
-            bars = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=300)
-            if not bars or len(bars) < 250: continue
+            bars = await asyncio.to_thread(exchange.fetch_ohlcv,f"{coin}/USDT",'1h',300)
+            df = pd.DataFrame(bars,columns=['t','open','high','low','close','vol'])
+            df['ema200']=ema(df['close'],200)
+            df['rsi']=rsi(df['close'])
+            df['macd'],df['sig']=macd(df['close'])
+            df['adx']=adx(df)
+            c,p = df.iloc[-1], df.iloc[-2]
 
-            df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-            df['date'] = pd.to_datetime(df['date'], unit='ms')
-            df.set_index('date', inplace=True)
+            if c['adx']<25: continue
+            if c['close']>c['ema200'] and p['macd']<p['sig'] and c['macd']>c['sig']:
+                atr = (df['high']-df['low']).rolling(14).mean().iloc[-1]
+                tp1,tp2,tp3 = c['close']+atr*1.5, c['close']+atr*3, c['close']+atr*6
+                sl = c['close']-atr*2
+                SON_SINYAL[coin]=datetime.now()
 
-            df['ema200'] = calculate_ema(df['close'], 200) 
-            df['rsi'] = calculate_rsi(df['close'])          
-            df['macd'], df['signal'] = calculate_macd(df['close']) 
-            df['adx'] = calculate_adx(df)                   
-            df['atr'] = calculate_atr(df)
-            df['vol_ma'] = df['volume'].rolling(window=20).mean()
+                conn=sqlite3.connect("trade.db")
+                conn.execute("INSERT INTO trades VALUES (NULL,?,?,?,?,?,?,?,1,'ACIK',0,?)",
+                (coin,"LONG",c['close'],tp1,tp2,tp3,sl,datetime.now()))
+                conn.commit(); conn.close()
 
-            pivot, r1, s1 = calculate_pivots(df)
+                img = grafik(df,coin,tp1,tp2,tp3,sl)
+                await application.bot.send_photo(
+                    chat_id=KANAL_ID,
+                    photo=img,
+                    caption=f"⚡ <b>VIP SİNYAL</b>\n#{coin}\n📈 LONG\n📊 WinRate: %{winrate():.1f}",
+                    parse_mode=ParseMode.HTML
+                )
+        except: pass
 
-            curr = df.iloc[-1]
-            prev = df.iloc[-2]
-            fiyat = curr['close']
-            atr = curr['atr']
+# ===================== TRADE CONTROL =====================
+def winrate():
+    conn=sqlite3.connect("trade.db")
+    df=pd.read_sql("SELECT * FROM trades WHERE durum!='ACIK'",conn)
+    conn.close()
+    if len(df)==0: return 0
+    return (df[df['pnl']>0].shape[0]/len(df))*100
 
-            sinyal = None
-            setup_reason = ""
-            hacim_teyidi = curr['volume'] > curr['vol_ma']
+async def kontrol():
+    conn=sqlite3.connect("trade.db")
+    df=pd.read_sql("SELECT * FROM trades WHERE durum='ACIK'",conn)
+    for _,r in df.iterrows():
+        fiyat=(await asyncio.to_thread(exchange.fetch_ticker,f"{r.coin}/USDT"))['last']
+        pnl=0
+        if fiyat>=r.tp1 and r.kalan==1:
+            pnl+=0.5*((r.tp1-r.giris)/r.giris)*100
+            kalan=0.5
+        elif fiyat>=r.tp2 and r.kalan==0.5:
+            pnl+=0.25*((r.tp2-r.giris)/r.giris)*100
+            kalan=0.25
+        elif fiyat<=r.sl:
+            pnl+=(fiyat-r.giris)/r.giris*100*r.kalan
+            kalan=0
+        else: continue
 
-            tp1, tp2, tp3 = 0, 0, 0
-            stop_loss = 0
+        conn.execute("UPDATE trades SET kalan=?, pnl=pnl+?, durum=? WHERE id=?",
+            (kalan,pnl,"KAPANDI" if kalan==0 else "ACIK",r.id))
+        conn.commit()
+    conn.close()
 
-            dirence_yakinlik = (r1 - fiyat) / fiyat
-            destege_yakinlik = (fiyat - s1) / fiyat
-            
-            # --- LONG ---
-            if (fiyat > curr['ema200']) and (curr['adx'] > 20):
-                if dirence_yakinlik > 0.005: 
-                    macd_cross = (prev['macd'] < prev['signal']) and (curr['macd'] > curr['signal'])
-                    rsi_bounce = (prev['rsi'] < 40) and (curr['rsi'] > 40)
-                    
-                    if (macd_cross or rsi_bounce) and hacim_teyidi:
-                        sinyal = "LONG 🟢"
-                        setup_reason = "Trend + Hacim + Pivot Onayı"
-                        stop_loss = fiyat - (atr * 2.0)
-                        tp1 = fiyat + (atr * 1.5)
-                        tp2 = fiyat + (atr * 3.0)
-                        tp3 = fiyat + (atr * 6.0)
-
-            # --- SHORT ---
-            elif (fiyat < curr['ema200']) and (curr['adx'] > 20):
-                if destege_yakinlik > 0.005:
-                    macd_cross = (prev['macd'] > prev['signal']) and (curr['macd'] < curr['signal'])
-                    rsi_dump = (prev['rsi'] > 60) and (curr['rsi'] < 60)
-                    
-                    if (macd_cross or rsi_dump) and hacim_teyidi:
-                        sinyal = "SHORT 🔴"
-                        setup_reason = "Baskı + Hacim + Pivot Onayı"
-                        stop_loss = fiyat + (atr * 2.0)
-                        tp1 = fiyat - (atr * 1.5)
-                        tp2 = fiyat - (atr * 3.0)
-                        tp3 = fiyat - (atr * 6.0)
-
-            if sinyal:
-                SON_SINYAL_ZAMANI[coin] = su_an
-                yon_str = "LONG" if "LONG" in sinyal else "SHORT"
-                islem_kaydet(coin, yon_str, fiyat, tp1, stop_loss)
-                print(f"🎯 Sinyal Bulundu: {coin} -> {sinyal}")
-                
-                resim = grafik_olustur(coin, df.tail(80), tp1, tp2, tp3, stop_loss, pivot, r1, s1)
-                p_fmt = ".8f" if fiyat < 0.01 else ".4f"
-                
-                mesaj = f"""
-⚡ <b>QUANT VIP SİNYAL</b>
-🪙 <b>#{coin}</b>
-📊 <b>Yön:</b> {sinyal}
-📉 <b>Sebep:</b> {setup_reason}
-
-💰 <b>Giriş:</b> ${fiyat:{p_fmt}}
-🎯 <b>HEDEFLER</b>
-1️⃣ <b>TP1:</b> ${tp1:{p_fmt}}
-2️⃣ <b>TP2:</b> ${tp2:{p_fmt}}
-3️⃣ <b>TP3:</b> ${tp3:{p_fmt}}
-🛑 <b>Stop Loss:</b> ${stop_loss:{p_fmt}}
-
-🧱 <b>Pivot:</b> R1: ${r1:{p_fmt}} | S1: ${s1:{p_fmt}}
-🧠 <i>ADX: {curr['adx']:.1f}</i>
-"""
-                if resim:
-                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
-                else:
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                
-                await asyncio.sleep(2)
-
-        except Exception as e:
-            print(f"Hata ({coin}): {e}")
-            continue
-
-# ==========================================
-# 🏁 MAIN
-# ==========================================
+# ===================== MAIN =====================
 async def main():
-    db_baslat()
-    pnl_db_baslat()
-    global RAPOR_ZAMANI
-    
-    print("🚀 Bot Tamamen Aktif! (Haber, Multi-TP ve Pivot Korumalı)")
-    
-    # Başlarken önceki performansı göster
-    detayli_performans_analizi()
-    
-    sayac = 0
+    db_init()
+    await application.initialize()
+    await application.start()
     while True:
-        await haberleri_kontrol_et()
-        await piyasayi_tarama()
-        await islemleri_kontrol_et()
-        
-        if (datetime.now() - RAPOR_ZAMANI) > timedelta(hours=24):
-             # Günlük Telegram Raporu (Mevcut kodunda vardı, onu çağırır)
-             # Burada ek olarak terminale detaylı dökelim
-             detayli_performans_analizi()
-             RAPOR_ZAMANI = datetime.now()
-        
-        sayac += 1
-        print(f"💤 Bekleme... (Döngü: {sayac})")
+        await scan()
+        await kontrol()
         await asyncio.sleep(180)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
