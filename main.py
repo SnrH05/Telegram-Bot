@@ -14,7 +14,7 @@ GEMINI_KEY = os.getenv("GEMINI_KEY", "")
 if not TOKEN or not GEMINI_KEY or not KANAL_ID:
     sys.exit("❌ ENV eksik")
 
-client = genai.Client(api_key=GEMINI_KEY)
+genai.configure(api_key=GEMINI_KEY)
 application = Application.builder().token(TOKEN).build()
 
 exchange = ccxt.kucoin({'enableRateLimit': True})
