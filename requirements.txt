@@ -1,8 +1,9 @@
-python-telegram-bot==21.6
 ccxt
-feedparser
 numpy
-pandas
-mplfinance
+python-telegram-bot
 google-genai
-
+feedparser
+flask
+requests
+mplfinance
+pandas
