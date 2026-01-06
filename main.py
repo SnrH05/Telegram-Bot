@@ -16,7 +16,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ ULTRA QUANT PIVOT MASTER BOT (TURBO MOD v2) BAŞLATILIYOR...")
+print("⚙️ ULTRA QUANT PIVOT MASTER BOT (v3 - SAFE & FAST MOD) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -29,7 +29,7 @@ if not TOKEN or not GEMINI_KEY or not KANAL_ID:
     print("❌ HATA: ENV bilgileri eksik!")
     sys.exit(1)
 
-# Gemini Client (Thread içinde çağıracağız)
+# Gemini Client
 client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 bot = Bot(token=TOKEN)
 
@@ -133,7 +133,7 @@ def _grafik_olustur_sync(coin, df_gelen, tp1, tp2, tp3, sl_price, pivot, r1, s1)
             linewidths=[1.0, 1.2, 1.5, 1.5, 0.8, 0.8, 0.8], alpha=0.8, linestyle='-.'
         )
         mpf.plot(
-            df, type='candle', style=my_style, title=f"\n{coin}/USDT - Pivot & TP Analiz",
+            df, type='candle', style=my_style, title=f"\n{coin}/USDT - Safe Mode v3",
             ylabel='Fiyat ($)', ylabel_lower='MACD', addplot=apds, hlines=h_lines, volume=False,
             panel_ratios=(3, 1), savefig=dict(fname=buf, dpi=120, bbox_inches='tight', facecolor=theme_color)
         )
@@ -148,7 +148,7 @@ async def grafik_olustur_async(coin, df, tp1, tp2, tp3, sl, pivot, r1, s1):
     return await loop.run_in_executor(None, _grafik_olustur_sync, coin, df, tp1, tp2, tp3, sl, pivot, r1, s1)
 
 # ==========================================
-# 🧠 BÖLÜM 3: YAPAY ZEKA (Strict Mode & Temiz Format)
+# 🧠 BÖLÜM 3: YAPAY ZEKA
 # ==========================================
 
 def db_baslat():
@@ -168,16 +168,12 @@ def link_kontrol(link):
         except sqlite3.IntegrityError:
             return False
 
-# 🚀 GÜNCELLEME: Promptu "Katı Kurallı" moda geçirdik, gevezelik yapamaz.
 def _ai_analiz_sync(prompt):
     try:
         r = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         text = r.text.strip()
-        
-        # Regex ile sadece istenen kısımları çekiyoruz
         ozet_match = re.search(r"ÖZET:(.*)", text, re.DOTALL)
         skor_match = re.search(r"SKOR:\s*(-?\d)", text)
-        
         temiz_ozet = ozet_match.group(1).strip() if ozet_match else "Özet oluşturulamadı."
         skor = int(skor_match.group(1)) if skor_match else 0
         return temiz_ozet, skor
@@ -185,17 +181,15 @@ def _ai_analiz_sync(prompt):
         return "Analiz yapılamadı.", 0
 
 async def ai_analiz(baslik, ozet):
-    # Katı Prompt
     prompt = f"""
     GÖREV: Aşağıdaki kripto haberini analiz et.
     HABER BAŞLIĞI: {baslik}
     HABER ÖZETİ: {ozet}
     
     KURALLAR:
-    1. Asla "Tamam", "Anlaşıldı", "Analiz ediyorum" gibi giriş cümleleri kurma.
-    2. Asla "Varsayımlar", "Ek Notlar" gibi başlıklar ekleme.
-    3. Çıktı formatına %100 sadık kal.
-    4. Skor -2 (Çok Kötü) ile +2 (Çok İyi) arasında tam sayı olsun.
+    1. Asla "Tamam", "Anlaşıldı" gibi giriş cümleleri kurma.
+    2. Çıktı formatına %100 sadık kal.
+    3. Skor -2 (Çok Kötü) ile +2 (Çok İyi) arasında tam sayı olsun.
 
     İSTENEN ÇIKTI FORMATI:
     ÖZET:[Tek bir emoji ile başlayan maksimum 2 cümlelik özet]
@@ -204,7 +198,6 @@ async def ai_analiz(baslik, ozet):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _ai_analiz_sync, prompt)
 
-# 🚀 GÜNCELLEME: Haber mesaj tasarımı sadeleştirildi
 async def haberleri_kontrol_et():
     print("📰 Haberler taranıyor...")
     for rss in RSS_LIST:
@@ -216,7 +209,6 @@ async def haberleri_kontrol_et():
                     t = datetime.fromtimestamp(time.mktime(entry.published_parsed))
                     if (datetime.now() - t) > timedelta(minutes=45): continue
                 
-                # HTML temizliği
                 raw_summary = entry.get("summary", entry.get("description", ""))
                 clean_text = re.sub('<[^<]+?>', '', raw_summary)
                 
@@ -224,7 +216,6 @@ async def haberleri_kontrol_et():
                 if abs(skor) < 2: continue 
                 
                 skor_icon = "🟢" if skor > 0 else "🔴"
-                
                 mesaj = f"""
 <b>{entry.title}</b>
 
@@ -239,7 +230,7 @@ async def haberleri_kontrol_et():
             print(f"RSS Hatası: {e}")
 
 # ==========================================
-# 📊 BÖLÜM 4: RAPORLAMA VE DB (DETAYLI BİLDİRİM)
+# 📊 BÖLÜM 4: RAPORLAMA VE DB
 # ==========================================
 RAPOR_ZAMANI = datetime.now()
 
@@ -285,7 +276,6 @@ def detayli_performans_analizi():
     except Exception as e:
         print(f"Rapor Hatası: {e}")
 
-# 🚀 GÜNCELLEME: İşlem kapandığında detaylı rapor atan fonksiyon
 async def islemleri_kontrol_et(exchange):
     with sqlite3.connect("trade_pnl.db") as conn:
         c = conn.cursor()
@@ -322,7 +312,6 @@ async def islemleri_kontrol_et(exchange):
                     conn.execute("UPDATE islemler SET durum=?, pnl_yuzde=?, kapanis_zamani=? WHERE id=?", 
                               (sonuc, pnl, datetime.now(), id))
                 
-                # Şık Bildirim Tasarımı
                 ikon = "✅" if sonuc == "KAZANDI" else "❌"
                 renk = "🟢" if sonuc == "KAZANDI" else "🔴"
                 p_fmt = ".8f" if fiyat < 0.01 else ".4f"
@@ -338,14 +327,14 @@ async def islemleri_kontrol_et(exchange):
 🚪 <b>Çıkış:</b> ${fiyat:{p_fmt}}
 📉 <b>Kâr/Zarar:</b> %{pnl:.2f}
 
-🤖 <i>Otomatik Takip Sistemi</i>
+🤖 <i>Safe Mode v3</i>
 """
                 await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                 detayli_performans_analizi()
         except: continue
 
 # ==========================================
-# 🚀 BÖLÜM 5: TEKNİK ANALİZ (ASENKRON & PARALEL)
+# 🚀 BÖLÜM 5: TEKNİK ANALİZ (SAFE MODE GÜNCELLEMESİ)
 # ==========================================
 
 async def get_ohlcv_safe(exchange, symbol):
@@ -356,26 +345,39 @@ async def get_ohlcv_safe(exchange, symbol):
         return symbol, None
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TEKNİK TARAMA (PARALEL)...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M:%S')}) TARAMA (SAFE MODE)...")
     su_an = datetime.now()
 
-    # 1. BTC Verisini Çek
+    # --- 🔥 GÜNCELLEME: AKILLI BTC ANALİZİ ---
     btc_trend = "NEUTRAL"
     try:
         btc_bars = await exchange.fetch_ohlcv('BTC/USDT', timeframe='1h', limit=250)
         btc_df = pd.DataFrame(btc_bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
         btc_ema200 = calculate_ema(btc_df['close'], 200).iloc[-1]
-        btc_price = btc_df['close'].iloc[-1]
-        btc_trend = "BULL" if btc_price > btc_ema200 else "BEAR"
-        print(f"🦁 BTC YÖN: {btc_trend} (Fiyat: {btc_price:.0f})")
+        
+        # Son mumun verileri
+        btc_last_close = btc_df['close'].iloc[-1]
+        btc_last_open = btc_df['open'].iloc[-1]
+        
+        # Saatlik Yüzdelik Değişim (Dump Tespiti için)
+        btc_hourly_change = (btc_last_close - btc_last_open) / btc_last_open
+
+        if btc_last_close < btc_ema200:
+            btc_trend = "BEAR"
+        elif btc_hourly_change < -0.015: # 🔥 EĞER %1.5 DÜŞÜŞ VARSA (EMA ÜSTÜ OLSA BİLE)
+            btc_trend = "DUMP_TEHLIKESI"
+            print("⚠️ UYARI: BTC'de Ani Çöküş Riski Tespit Edildi!")
+        else:
+            btc_trend = "BULL"
+            
+        print(f"🦁 BTC YÖN: {btc_trend} (Fiyat: {btc_last_close:.0f})")
     except Exception as e:
         print(f"⚠️ BTC Analiz Hatası: {e}")
 
-    # 2. Tüm Coinleri Çek
+    # 2. Coin Tarama
     tasks = [get_ohlcv_safe(exchange, f"{coin}/USDT") for coin in COIN_LIST]
     results = await asyncio.gather(*tasks)
 
-    # 3. Sonuçları İşle
     for symbol_pair, bars in results:
         coin = symbol_pair.split('/')[0]
         if coin in SON_SINYAL_ZAMANI:
@@ -389,9 +391,9 @@ async def piyasayi_tarama(exchange):
             df.set_index('date', inplace=True)
 
             df['ema200'] = calculate_ema(df['close'], 200) 
-            df['rsi'] = calculate_rsi(df['close'])          
+            df['rsi'] = calculate_rsi(df['close'])           
             df['macd'], df['signal'] = calculate_macd(df['close']) 
-            df['adx'] = calculate_adx(df)                   
+            df['adx'] = calculate_adx(df)                    
             df['atr'] = calculate_atr(df)
             df['vol_ma'] = df['volume'].rolling(window=20).mean()
             pivot, r1, s1 = calculate_pivots(df)
@@ -408,7 +410,10 @@ async def piyasayi_tarama(exchange):
             destege_yakinlik = (fiyat - s1) / fiyat
             tp1, tp2, tp3, stop_loss = 0,0,0,0
 
-            # Strateji
+            # --- 🔥 GÜNCELLEME: R:R ORANLARI REVİZE EDİLDİ ---
+            # HEDEF: Daha güvenli Stop, Daha yüksek TP
+            
+            # LONG STRATEJİ
             if (fiyat > curr['ema200']) and (curr['adx'] > 20):
                 if dirence_yakinlik > 0.005: 
                     macd_cross = (prev['macd'] < prev['signal']) and (curr['macd'] > curr['signal'])
@@ -416,11 +421,13 @@ async def piyasayi_tarama(exchange):
                     if (macd_cross or rsi_bounce) and hacim_teyidi:
                         sinyal = "LONG 🟢"
                         setup_reason = "Trend + Hacim + Pivot Onayı"
-                        stop_loss = fiyat - (atr * 2.0)
-                        tp1 = fiyat + (atr * 1.5)
-                        tp2 = fiyat + (atr * 3.0)
-                        tp3 = fiyat + (atr * 6.0)
+                        # YENİ R:R AYARLARI
+                        stop_loss = fiyat - (atr * 1.5) # Daha sıkı stop (Eski: 2.0)
+                        tp1 = fiyat + (atr * 2.5)       # Daha yüksek ödül (Eski: 1.5)
+                        tp2 = fiyat + (atr * 4.0)
+                        tp3 = fiyat + (atr * 7.0)
 
+            # SHORT STRATEJİ
             elif (fiyat < curr['ema200']) and (curr['adx'] > 20):
                 if destege_yakinlik > 0.005:
                     macd_cross = (prev['macd'] > prev['signal']) and (curr['macd'] < curr['signal'])
@@ -428,16 +435,20 @@ async def piyasayi_tarama(exchange):
                     if (macd_cross or rsi_dump) and hacim_teyidi:
                         sinyal = "SHORT 🔴"
                         setup_reason = "Baskı + Hacim + Pivot Onayı"
-                        stop_loss = fiyat + (atr * 2.0)
-                        tp1 = fiyat - (atr * 1.5)
-                        tp2 = fiyat - (atr * 3.0)
-                        tp3 = fiyat - (atr * 6.0)
+                        # YENİ R:R AYARLARI
+                        stop_loss = fiyat + (atr * 1.5) # Daha sıkı stop
+                        tp1 = fiyat - (atr * 2.5)       # Daha yüksek ödül
+                        tp2 = fiyat - (atr * 4.0)
+                        tp3 = fiyat - (atr * 7.0)
 
-            # BTC Filtresi
+            # --- 🔥 GÜNCELLEME: BTC FİLTRESİ REVİZE EDİLDİ ---
             if sinyal:
-                if "LONG" in sinyal and btc_trend == "BEAR":
-                    print(f"🚫 {coin} LONG iptal (BTC Bear)")
+                # 1. LONG Kuralları: BTC Bear veya Dump Tehlikesi varsa iptal
+                if "LONG" in sinyal and (btc_trend == "BEAR" or btc_trend == "DUMP_TEHLIKESI"):
+                    print(f"🚫 {coin} LONG iptal (BTC Sorunlu)")
                     sinyal = None
+                
+                # 2. SHORT Kuralları: Sadece BTC tam BULL ise iptal (Dump Tehlikesi varsa Short AÇ)
                 elif "SHORT" in sinyal and btc_trend == "BULL":
                     print(f"🚫 {coin} SHORT iptal (BTC Bull)")
                     sinyal = None
@@ -451,13 +462,13 @@ async def piyasayi_tarama(exchange):
                 resim = await grafik_olustur_async(coin, df.tail(80), tp1, tp2, tp3, stop_loss, pivot, r1, s1)
                 p_fmt = ".8f" if fiyat < 0.01 else ".4f"
                 mesaj = f"""
-⚡ <b>QUANT VIP SİNYAL</b>
+⚡ <b>QUANT VIP SİNYAL (v3)</b>
 🪙 <b>#{coin}</b>
 📊 <b>Yön:</b> {sinyal}
 📉 <b>Sebep:</b> {setup_reason}
 
 💰 <b>Giriş:</b> ${fiyat:{p_fmt}}
-🎯 <b>HEDEFLER</b>
+🎯 <b>HEDEFLER (Yüksek R:R)</b>
 1️⃣ <b>TP1:</b> ${tp1:{p_fmt}}
 2️⃣ <b>TP2:</b> ${tp2:{p_fmt}}
 3️⃣ <b>TP3:</b> ${tp3:{p_fmt}}
@@ -485,7 +496,7 @@ async def main():
     global RAPOR_ZAMANI
     
     exchange = ccxt.kucoin(exchange_config)
-    print("🚀 Bot Tamamen Aktif! (TURBO ASYNC MOD v2)")
+    print("🚀 Bot Tamamen Aktif! (HIZLI & GÜVENLİ MOD v3)")
     detayli_performans_analizi()
     
     sayac = 0
@@ -500,8 +511,9 @@ async def main():
                 RAPOR_ZAMANI = datetime.now()
             
             sayac += 1
-            print(f"💤 Bekleme... (Döngü: {sayac})")
-            await asyncio.sleep(180)
+            print(f"💤 Hızlı Bekleme... (Döngü: {sayac})")
+            # 🔥 GÜNCELLEME: Bekleme süresi 45 saniyeye düşürüldü (Eski: 180)
+            await asyncio.sleep(45) 
     except KeyboardInterrupt:
         print("\n🛑 Bot Durduruluyor...")
     finally:
