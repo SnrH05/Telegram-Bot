@@ -430,7 +430,7 @@ async def main():
     global RAPOR_ZAMANI
     
     # Binance kullanılabilir, logic generic.
-    exchange = ccxt.binance(exchange_config)
+    exchange = ccxt.kucoin(exchange_config)
     print("🚀 TITANIUM BOT Aktif! (Live Monitor)")
     detayli_performans_analizi()
     
