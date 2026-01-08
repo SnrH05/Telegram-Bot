@@ -25,7 +25,7 @@ TOKEN = os.getenv("BOT_TOKEN", "").strip()
 KANAL_ID = int(os.getenv("KANAL_ID", "0"))
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
-# Hata kontrolü (Opsiyonel: Eğer lokalde test ediyorsan burayı yorum satırı yapabilirsin)
+# Hata kontrolü
 if not TOKEN or not GEMINI_KEY or not KANAL_ID:
     print("⚠️ UYARI: ENV bilgileri eksik olabilir! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
 
@@ -253,7 +253,6 @@ async def islemleri_kontrol_et(exchange):
     for islem in acik_islemler:
         id, coin, yon, giris, tp, sl = islem
         try:
-            # KuCoin sembol formatı aynıdır (COIN/USDT)
             ticker = await exchange.fetch_ticker(f"{coin}/USDT") 
             fiyat = ticker['last']
             sonuc, pnl = None, 0
@@ -305,7 +304,7 @@ async def islemleri_kontrol_et(exchange):
             continue
 
 # ==========================================
-# 🚀 BÖLÜM 5: TEKNİK ANALİZ (GÜNCELLENDİ)
+# 🚀 BÖLÜM 5: TEKNİK ANALİZ (DÜZELTİLDİ)
 # ==========================================
 
 async def get_ohlcv_safe(exchange, symbol):
@@ -356,12 +355,10 @@ async def piyasayi_tarama(exchange):
             trend_bearish = curr['sma50'] < curr['sma200']
             
             # --- DEBUG LOGU ---
-            # Bunu konsolda görüyorsan veri çekiliyor demektir
             yon_debug = "BULL" if trend_bullish else "BEAR"
             print(f"👀 {coin}: Fiyat={price:.2f} | RSI={rsi_val:.1f} | Trend={yon_debug}")
             
-            # --- STRATEJİ (ESNETİLDİ) ---
-            # 30/70 -> 35/65
+            # --- STRATEJİ (ESNETİLDİ: 35/65) ---
             oversold = rsi_val < 35
             overbought = rsi_val > 65
             
@@ -371,12 +368,13 @@ async def piyasayi_tarama(exchange):
             yon = None
             setup_reason = ""
             
+            # 🛠️ TELEGRAM HTML HATASI DÜZELTİLDİ (< ve > kaldırıldı)
             if trend_bullish and oversold and above_trend:
                 yon = "LONG"
-                setup_reason = "Bull Trend + RSI < 35 + Price > SMA200"
+                setup_reason = "Bull Trend - RSI Dip (35 Alti) - Fiyat SMA200 Uzeri"
             elif trend_bearish and overbought and below_trend:
                 yon = "SHORT"
-                setup_reason = "Bear Trend + RSI > 65 + Price < SMA200"
+                setup_reason = "Bear Trend - RSI Tepe (65 Ustu) - Fiyat SMA200 Alti"
             
             if yon:
                 if yon == "LONG":
@@ -426,9 +424,7 @@ async def main():
     pnl_db_baslat()
     global RAPOR_ZAMANI
     
-    # ----------------------------------------
-    # 🛠️ BORSA DEĞİŞİMİ YAPILDI: KuCoin
-    # ----------------------------------------
+    # KUCOIN AKTİF
     exchange = ccxt.kucoin(exchange_config)
     print("🚀 TITANIUM BOT Aktif! (Live Monitor - KuCoin)")
     detayli_performans_analizi()
@@ -436,7 +432,7 @@ async def main():
     sayac = 0
     try:
         while True:
-            # Haberleri şimdilik kapalı tutuyoruz, odak teknik analizde.
+            # Haber analiz modülü (isteğe bağlı açabilirsin)
             # await haberleri_kontrol_et()
             
             await piyasayi_tarama(exchange)
@@ -460,3 +456,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+                
