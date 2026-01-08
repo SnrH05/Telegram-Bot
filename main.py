@@ -16,38 +16,25 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM STRATEGY BOT (V1 - RAILWAY VERSION) BAŞLATILIYOR...")
+print("⚙️ TITANIUM STRATEGY BOT (V1 - LIVE - KUCOIN EDITION) BAŞLATILIYOR...")
 
 # ==========================================
-# 🔧 AYARLAR (RAILWAY ENV'DEN OKUR)
+# 🔧 AYARLAR
 # ==========================================
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
-KANAL_ID_STR = os.getenv("KANAL_ID", "0").strip()
+KANAL_ID = int(os.getenv("KANAL_ID", "0"))
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
-# Kanal ID Dönüşümü (Hata önleyici)
-try:
-    KANAL_ID = int(KANAL_ID_STR)
-except ValueError:
-    print(f"❌ HATA: ENV'deki KANAL_ID sayı değil! Okunan: {KANAL_ID_STR}")
-    KANAL_ID = 0
-
-# Kritik Kontroller (Railway Loglarına Düşer)
-if not TOKEN:
-    print("❌ KRİTİK HATA: Railway Variables kısmında 'BOT_TOKEN' tanımlanmamış!")
-    # sys.exit(1) # Kodun çökmemesi için açık bıraktım ama çalışmaz.
-
-if not GEMINI_KEY:
-    print("⚠️ UYARI: 'GEMINI_KEY' eksik. Haber analizi çalışmayacak.")
-
-if KANAL_ID == 0:
-    print("❌ KRİTİK HATA: 'KANAL_ID' hatalı veya tanımlanmamış. Mesaj atılamaz.")
+# Hata kontrolü (Opsiyonel: Eğer lokalde test ediyorsan burayı yorum satırı yapabilirsin)
+if not TOKEN or not GEMINI_KEY or not KANAL_ID:
+    print("⚠️ UYARI: ENV bilgileri eksik olabilir! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
 
 # Gemini Client
 try:
     client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 except:
     client = None
+    print("⚠️ Gemini Client başlatılamadı.")
 
 bot = Bot(token=TOKEN)
 
@@ -56,6 +43,7 @@ exchange_config = {
     'options': {'defaultType': 'spot'}
 }
 
+# BACKTEST DOSYASINDAN GELEN LISTE
 COIN_LIST = [
     "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
     "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
@@ -68,40 +56,11 @@ RSS_LIST = [
     "https://decrypt.co/feed"
 ]
 
+# TITANIUM V1 AYARLARI
 KAR_HEDEFI_ORAN = 0.025  # %2.5
 ZARAR_DURDUR_ORAN = 0.06 # %6.0
 
 SON_SINYAL_ZAMANI = {}
-
-# ==========================================
-# 🧪 TELEGRAM BAĞLANTISI TEST (RAILWAY İÇİN)
-# ==========================================
-async def telegram_test_et():
-    print("-" * 40)
-    print("📡 RAILWAY: TELEGRAM TESTİ BAŞLIYOR...")
-    
-    if not TOKEN or KANAL_ID == 0:
-        print("❌ TEST İPTAL: Token veya Kanal ID eksik.")
-        return
-
-    try:
-        # 1. Bot bilgilerini çek
-        me = await bot.get_me()
-        print(f"✅ Bot Kimliği Doğrulandı: @{me.username}")
-        
-        # 2. Deneme mesajı at
-        msg = await bot.send_message(
-            chat_id=KANAL_ID, 
-            text=f"🚀 <b>TITANIUM BOT RAILWAY'DE AKTİF!</b>\n\n✅ Sinyal sistemi başlatıldı.\n🕒 {datetime.now().strftime('%H:%M:%S')}", 
-            parse_mode=ParseMode.HTML
-        )
-        print(f"✅ TEST MESAJI GÖNDERİLDİ! Mesaj ID: {msg.message_id}")
-    except Exception as e:
-        print(f"❌ TELEGRAM TEST HATASI: {e}")
-        print("👉 Railway 'Variables' sekmesini kontrol et.")
-        print("👉 KANAL_ID başında -100 olduğundan emin ol.")
-        print("👉 Botun kanalda 'Admin' olduğundan emin ol.")
-    print("-" * 40)
 
 # ==========================================
 # 🧮 BÖLÜM 1: İNDİKATÖRLER
@@ -166,7 +125,6 @@ async def grafik_olustur_async(coin, df, tp, sl, signal_type):
 # 🧠 BÖLÜM 3: YAPAY ZEKA
 # ==========================================
 def db_baslat():
-    # Railway'de veri kalıcılığı için Volume kullanmıyorsanız her deployda sıfırlanır.
     conn = sqlite3.connect("haber_hafizasi.db")
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS gonderilenler (link TEXT PRIMARY KEY)")
@@ -295,6 +253,7 @@ async def islemleri_kontrol_et(exchange):
     for islem in acik_islemler:
         id, coin, yon, giris, tp, sl = islem
         try:
+            # KuCoin sembol formatı aynıdır (COIN/USDT)
             ticker = await exchange.fetch_ticker(f"{coin}/USDT") 
             fiyat = ticker['last']
             sonuc, pnl = None, 0
@@ -337,42 +296,48 @@ async def islemleri_kontrol_et(exchange):
 """
                 try:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                    print(f"📤 Kapanış bildirimi yollandı: {coin}")
                 except Exception as e:
-                    print(f"❌ KAPANIŞ TELEGRAM HATASI: {e}")
+                    print(f"❌ KAPANIŞ MESAJI TELEGRAM HATASI: {e}")
                 
                 detayli_performans_analizi()
         except Exception as e: 
+            print(f"İşlem Kontrol Hatası ({coin}): {e}")
             continue
 
 # ==========================================
-# 🚀 BÖLÜM 5: TEKNİK ANALİZ
+# 🚀 BÖLÜM 5: TEKNİK ANALİZ (GÜNCELLENDİ)
 # ==========================================
 
 async def get_ohlcv_safe(exchange, symbol):
     try:
-        # Railway'de IP bloklanması yaşamamak için bazen limit düşürmek gerekebilir.
         return symbol, await exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
     except Exception as e:
-        # Hata basıp log kirliliği yapmaması için sessiz geçiyoruz (451 hataları vb)
-        if '451' not in str(e):
-             print(f"Veri çekme hatası ({symbol}): {e}")
+        if '451' in str(e) or 'restricted' in str(e).lower(): 
+            print(f"⚠️ {symbol} için erişim engeli (451 Restricted).")
+        else: 
+            print(f"⚠️ Veri çekme hatası ({symbol}): {e}")
         return symbol, None
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM TARAMA BAŞLADI...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM TARAMA (KUCOIN - PARALEL)...")
     su_an = datetime.now()
 
     tasks = [get_ohlcv_safe(exchange, f"{coin}/USDT") for coin in COIN_LIST]
     results = await asyncio.gather(*tasks)
 
     for symbol_pair, bars in results:
-        if not symbol_pair: continue
+        if not symbol_pair or not bars: 
+            continue
+        
         coin = symbol_pair.split('/')[0]
+        
+        # Spam kontrolü (4 saat)
         if coin in SON_SINYAL_ZAMANI:
             if (su_an - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=4): continue 
         
-        if not bars or len(bars) < 210: continue
+        if len(bars) < 210: 
+            # print(f"⚠️ {coin} için yetersiz veri: {len(bars)}")
+            continue
 
         try:
             df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
@@ -390,8 +355,16 @@ async def piyasayi_tarama(exchange):
             trend_bullish = curr['sma50'] > curr['sma200']
             trend_bearish = curr['sma50'] < curr['sma200']
             
-            oversold = rsi_val < 30
-            overbought = rsi_val > 70
+            # --- DEBUG LOGU ---
+            # Bunu konsolda görüyorsan veri çekiliyor demektir
+            yon_debug = "BULL" if trend_bullish else "BEAR"
+            print(f"👀 {coin}: Fiyat={price:.2f} | RSI={rsi_val:.1f} | Trend={yon_debug}")
+            
+            # --- STRATEJİ (ESNETİLDİ) ---
+            # 30/70 -> 35/65
+            oversold = rsi_val < 35
+            overbought = rsi_val > 65
+            
             above_trend = price > curr['sma200']
             below_trend = price < curr['sma200']
             
@@ -400,10 +373,10 @@ async def piyasayi_tarama(exchange):
             
             if trend_bullish and oversold and above_trend:
                 yon = "LONG"
-                setup_reason = "Bull Trend + RSI < 30 + Price > SMA200"
+                setup_reason = "Bull Trend + RSI < 35 + Price > SMA200"
             elif trend_bearish and overbought and below_trend:
                 yon = "SHORT"
-                setup_reason = "Bear Trend + RSI > 70 + Price < SMA200"
+                setup_reason = "Bear Trend + RSI > 65 + Price < SMA200"
             
             if yon:
                 if yon == "LONG":
@@ -415,7 +388,7 @@ async def piyasayi_tarama(exchange):
                 
                 SON_SINYAL_ZAMANI[coin] = su_an
                 islem_kaydet(coin, yon, price, tp_price, sl_price)
-                print(f"🎯 Sinyal Yakalandı: {coin} -> {yon}")
+                print(f"🎯 Sinyal YAKALANDI: {coin} -> {yon}")
                 
                 resim = await grafik_olustur_async(coin, df.tail(100), tp_price, sl_price, yon)
                 p_fmt = ".8f" if price < 0.01 else ".4f"
@@ -429,44 +402,43 @@ async def piyasayi_tarama(exchange):
 💰 <b>Fiyat:</b> ${price:{p_fmt}}
 🎯 <b>Hedef:</b> ${tp_price:{p_fmt}} (%2.5)
 🛑 <b>Stop:</b> ${sl_price:{p_fmt}} (%6.0)
+ℹ️ <b>RSI:</b> {rsi_val:.1f}
 
 🤖 <i>Auto-Trade System</i>
 """
-                # HATA YAKALAMA VE LOGLAMA
                 try:
                     if resim:
                         await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
                     else:
                         await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                    print(f"✅ Sinyal Telegram'a iletildi: {coin}")
                 except Exception as e:
-                    print(f"❌ TELEGRAM SİNYAL GÖNDERME HATASI: {e}")
-                    print(f"Hata Detayı: {str(e)}")
+                    print(f"❌ TELEGRAM SİNYAL HATASI: {e}")
 
         except Exception as e:
-            print(f"İşlem Hatası ({coin}): {e}")
+            print(f"⚠️ Analiz Hatası ({coin}): {e}")
             continue
 
 # ==========================================
-# 🏁 MAIN
+# 🏁 MAIN (KUCOIN AKTİF)
 # ==========================================
 async def main():
     db_baslat()
     pnl_db_baslat()
-    
-    # 🧪 İLK BAŞLATMADA TEST
-    # Bu test sayesinde Railway loglarında hatayı hemen göreceksin.
-    await telegram_test_et()
-    
     global RAPOR_ZAMANI
     
-    exchange = ccxt.binance(exchange_config)
-    print("🚀 TITANIUM BOT Railway Modunda Aktif!")
+    # ----------------------------------------
+    # 🛠️ BORSA DEĞİŞİMİ YAPILDI: KuCoin
+    # ----------------------------------------
+    exchange = ccxt.kucoin(exchange_config)
+    print("🚀 TITANIUM BOT Aktif! (Live Monitor - KuCoin)")
+    detayli_performans_analizi()
     
     sayac = 0
     try:
         while True:
+            # Haberleri şimdilik kapalı tutuyoruz, odak teknik analizde.
             # await haberleri_kontrol_et()
+            
             await piyasayi_tarama(exchange)
             await islemleri_kontrol_et(exchange)
             
@@ -488,4 +460,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-    
