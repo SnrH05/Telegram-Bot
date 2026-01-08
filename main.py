@@ -237,7 +237,9 @@ async def piyasayi_tarama(exchange):
         try:
             ohlcv = await exchange.fetch_ohlcv(f"{s}/USDT", '1h', limit=300)
             return s, ohlcv
-        except: return s, None
+        except Exception as e:
+            print(f"❌ Veri Hatası ({s}): {e}")
+            return s, None
 
     tasks = [fetch_candle(c) for c in COIN_LIST]
     results = await asyncio.gather(*tasks)
