@@ -146,7 +146,7 @@ def short_var_mi(coin):
 def islem_kaydet(coin, yon, giris, tp, sl):
     with sqlite3.connect("titanium_live.db") as conn:
         conn.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp, sl, acilis_zamani) VALUES (?, ?, ?, ?, ?, ?)", 
-                  (coin, yon, giris, tp, sl, datetime.now()))
+                  (coin, yon, giris, tp, sl, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
 # ==========================================
 # 🧠 BÖLÜM 4: AI HABER ANALİZİ (PREMIUM)
