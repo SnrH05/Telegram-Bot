@@ -395,8 +395,19 @@ async def pozisyonlari_yokla(exchange):
 async def main():
     db_ilk_kurulum()
     print("🚀 Titanium PREMIUM Bot Aktif! (Telegram: Sinyal + Haber)")
+    # KUCOIN AKTİF (Exchange degiskeni olusturulduktan sonra)
     exchange = ccxt.binance(exchange_config)
+    print("🚀 Titanium PREMIUM Bot Aktif! (Telegram: Sinyal + Haber)")
+    
+    # 📢 Railway Debug: Baslangic Mesaji At
     try:
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Tarama: 1 Dakika\n✅ Mod: Premium Hibrit", parse_mode=ParseMode.MARKDOWN)
+    except Exception as e:
+        print(f"❌ Telegram Test Mesajı Hatası: {e}")
+
+    # Eger ETH backtestten cikarildiysa buradan da cikaralim
+    if "ETH" in COIN_LIST:
+        COIN_LIST.remove("ETH")
         while True:
             # 1. Haberleri Kontrol Et (AI)
             await haberleri_kontrol_et()
