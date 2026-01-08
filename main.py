@@ -408,6 +408,8 @@ async def main():
     # Eger ETH backtestten cikarildiysa buradan da cikaralim
     if "ETH" in COIN_LIST:
         COIN_LIST.remove("ETH")
+
+    try:
         while True:
             # 1. Haberleri Kontrol Et (AI)
             await haberleri_kontrol_et()
