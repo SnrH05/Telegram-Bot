@@ -16,18 +16,32 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM STRATEGY BOT (V1 - LIVE - DEBUG MOD) BAŞLATILIYOR...")
+print("⚙️ TITANIUM STRATEGY BOT (V1 - RAILWAY VERSION) BAŞLATILIYOR...")
 
 # ==========================================
-# 🔧 AYARLAR
+# 🔧 AYARLAR (RAILWAY ENV'DEN OKUR)
 # ==========================================
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
-KANAL_ID = int(os.getenv("KANAL_ID", "0"))
+KANAL_ID_STR = os.getenv("KANAL_ID", "0").strip()
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
-if not TOKEN or not GEMINI_KEY or not KANAL_ID:
-    print("❌ HATA: ENV bilgileri eksik! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
-    # sys.exit(1)
+# Kanal ID Dönüşümü (Hata önleyici)
+try:
+    KANAL_ID = int(KANAL_ID_STR)
+except ValueError:
+    print(f"❌ HATA: ENV'deki KANAL_ID sayı değil! Okunan: {KANAL_ID_STR}")
+    KANAL_ID = 0
+
+# Kritik Kontroller (Railway Loglarına Düşer)
+if not TOKEN:
+    print("❌ KRİTİK HATA: Railway Variables kısmında 'BOT_TOKEN' tanımlanmamış!")
+    # sys.exit(1) # Kodun çökmemesi için açık bıraktım ama çalışmaz.
+
+if not GEMINI_KEY:
+    print("⚠️ UYARI: 'GEMINI_KEY' eksik. Haber analizi çalışmayacak.")
+
+if KANAL_ID == 0:
+    print("❌ KRİTİK HATA: 'KANAL_ID' hatalı veya tanımlanmamış. Mesaj atılamaz.")
 
 # Gemini Client
 try:
@@ -42,7 +56,6 @@ exchange_config = {
     'options': {'defaultType': 'spot'}
 }
 
-# BACKTEST DOSYASINDAN GELEN LISTE
 COIN_LIST = [
     "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
     "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
@@ -55,11 +68,40 @@ RSS_LIST = [
     "https://decrypt.co/feed"
 ]
 
-# TITANIUM V1 AYARLARI
 KAR_HEDEFI_ORAN = 0.025  # %2.5
 ZARAR_DURDUR_ORAN = 0.06 # %6.0
 
 SON_SINYAL_ZAMANI = {}
+
+# ==========================================
+# 🧪 TELEGRAM BAĞLANTISI TEST (RAILWAY İÇİN)
+# ==========================================
+async def telegram_test_et():
+    print("-" * 40)
+    print("📡 RAILWAY: TELEGRAM TESTİ BAŞLIYOR...")
+    
+    if not TOKEN or KANAL_ID == 0:
+        print("❌ TEST İPTAL: Token veya Kanal ID eksik.")
+        return
+
+    try:
+        # 1. Bot bilgilerini çek
+        me = await bot.get_me()
+        print(f"✅ Bot Kimliği Doğrulandı: @{me.username}")
+        
+        # 2. Deneme mesajı at
+        msg = await bot.send_message(
+            chat_id=KANAL_ID, 
+            text=f"🚀 <b>TITANIUM BOT RAILWAY'DE AKTİF!</b>\n\n✅ Sinyal sistemi başlatıldı.\n🕒 {datetime.now().strftime('%H:%M:%S')}", 
+            parse_mode=ParseMode.HTML
+        )
+        print(f"✅ TEST MESAJI GÖNDERİLDİ! Mesaj ID: {msg.message_id}")
+    except Exception as e:
+        print(f"❌ TELEGRAM TEST HATASI: {e}")
+        print("👉 Railway 'Variables' sekmesini kontrol et.")
+        print("👉 KANAL_ID başında -100 olduğundan emin ol.")
+        print("👉 Botun kanalda 'Admin' olduğundan emin ol.")
+    print("-" * 40)
 
 # ==========================================
 # 🧮 BÖLÜM 1: İNDİKATÖRLER
@@ -124,6 +166,7 @@ async def grafik_olustur_async(coin, df, tp, sl, signal_type):
 # 🧠 BÖLÜM 3: YAPAY ZEKA
 # ==========================================
 def db_baslat():
+    # Railway'de veri kalıcılığı için Volume kullanmıyorsanız her deployda sıfırlanır.
     conn = sqlite3.connect("haber_hafizasi.db")
     c = conn.cursor()
     c.execute("CREATE TABLE IF NOT EXISTS gonderilenler (link TEXT PRIMARY KEY)")
@@ -292,11 +335,11 @@ async def islemleri_kontrol_et(exchange):
 🚪 <b>Çıkış:</b> ${fiyat:{p_fmt}}
 📉 <b>Kâr/Zarar:</b> %{pnl:.2f}
 """
-                # HATA YAKALAMA BURAYA EKLENDİ
                 try:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    print(f"📤 Kapanış bildirimi yollandı: {coin}")
                 except Exception as e:
-                    print(f"❌ KAPANIŞ MESAJI TELEGRAM HATASI: {e}")
+                    print(f"❌ KAPANIŞ TELEGRAM HATASI: {e}")
                 
                 detayli_performans_analizi()
         except Exception as e: 
@@ -308,14 +351,16 @@ async def islemleri_kontrol_et(exchange):
 
 async def get_ohlcv_safe(exchange, symbol):
     try:
+        # Railway'de IP bloklanması yaşamamak için bazen limit düşürmek gerekebilir.
         return symbol, await exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
     except Exception as e:
-        if '451' in str(e) or 'restricted' in str(e).lower(): pass
-        else: print(f"Veri çekme hatası ({symbol}): {e}")
+        # Hata basıp log kirliliği yapmaması için sessiz geçiyoruz (451 hataları vb)
+        if '451' not in str(e):
+             print(f"Veri çekme hatası ({symbol}): {e}")
         return symbol, None
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM TARAMA (PARALEL)...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM TARAMA BAŞLADI...")
     su_an = datetime.now()
 
     tasks = [get_ohlcv_safe(exchange, f"{coin}/USDT") for coin in COIN_LIST]
@@ -370,7 +415,7 @@ async def piyasayi_tarama(exchange):
                 
                 SON_SINYAL_ZAMANI[coin] = su_an
                 islem_kaydet(coin, yon, price, tp_price, sl_price)
-                print(f"🎯 Sinyal: {coin} -> {yon}")
+                print(f"🎯 Sinyal Yakalandı: {coin} -> {yon}")
                 
                 resim = await grafik_olustur_async(coin, df.tail(100), tp_price, sl_price, yon)
                 p_fmt = ".8f" if price < 0.01 else ".4f"
@@ -387,14 +432,16 @@ async def piyasayi_tarama(exchange):
 
 🤖 <i>Auto-Trade System</i>
 """
-                # HATA YAKALAMA VE LOGLAMA BURAYA EKLENDİ (SENİN İSTEDİĞİN KISIM)
+                # HATA YAKALAMA VE LOGLAMA
                 try:
                     if resim:
                         await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
                     else:
                         await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    print(f"✅ Sinyal Telegram'a iletildi: {coin}")
                 except Exception as e:
-                    print(f"❌ TELEGRAM SİNYAL HATASI: {e}")
+                    print(f"❌ TELEGRAM SİNYAL GÖNDERME HATASI: {e}")
+                    print(f"Hata Detayı: {str(e)}")
 
         except Exception as e:
             print(f"İşlem Hatası ({coin}): {e}")
@@ -406,13 +453,15 @@ async def piyasayi_tarama(exchange):
 async def main():
     db_baslat()
     pnl_db_baslat()
+    
+    # 🧪 İLK BAŞLATMADA TEST
+    # Bu test sayesinde Railway loglarında hatayı hemen göreceksin.
+    await telegram_test_et()
+    
     global RAPOR_ZAMANI
     
-    # Kısıtlamayı aşmak için KuCoin veya Binance TR kullanabilirsin.
-    # Şimdilik global binance kalsın, hatayı yakalıyoruz.
     exchange = ccxt.binance(exchange_config)
-    print("🚀 TITANIUM BOT Aktif! (Live Monitor)")
-    detayli_performans_analizi()
+    print("🚀 TITANIUM BOT Railway Modunda Aktif!")
     
     sayac = 0
     try:
@@ -439,3 +488,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+    
