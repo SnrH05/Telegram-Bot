@@ -264,6 +264,15 @@ async def piyasayi_tarama(exchange):
         trend_bearish = curr['sma50'] < curr['sma200']
         rally_mode = price > curr['sma50']
         
+        # 🟢 RAILWAY DEBUG LOG (Her dakika akar)
+        print(f"👀 {coin}: Fiyat={price:.4f} | RSI={rsi_val:.1f} | Trend={'BULL' if trend_bullish else 'BEAR'}")
+        
+        # ⚠️ YAKIN FIRSAT LOGU
+        if trend_bullish and rsi_val < 35:
+             print(f"🚨 {coin} YAKIN LONG FIRSATI (RSI: {rsi_val:.1f} < 30 Bekleniyor)")
+        elif trend_bearish and rsi_val > 75:
+             print(f"🚨 {coin} YAKIN SHORT FIRSATI (RSI: {rsi_val:.1f} > 80 Bekleniyor)")
+        
         sinyal = None
         setup = ""
         tp_rate = 0.0
