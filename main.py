@@ -407,8 +407,8 @@ async def main():
             # 3. Pozisyonlari Takip Et
             await pozisyonlari_yokla(exchange)
             
-            print("💤 Bekleme (5dk)...")
-            await asyncio.sleep(300) 
+            print("💤 Bekleme (1dk)...")
+            await asyncio.sleep(60) 
     except KeyboardInterrupt:
         print("🛑 Bot Durduruluyor...")
     finally:
