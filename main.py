@@ -5,7 +5,6 @@ import sys
 import sqlite3
 import time
 import re
-# DİKKAT: ccxt'nin asenkron modülünü çağırıyoruz
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
@@ -16,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM STRATEGY BOT (V1 - LIVE - KUCOIN EDITION) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (STRATEGY + AI NEWS) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -25,25 +24,24 @@ TOKEN = os.getenv("BOT_TOKEN", "").strip()
 KANAL_ID = int(os.getenv("KANAL_ID", "0"))
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
-# Hata kontrolü
 if not TOKEN or not GEMINI_KEY or not KANAL_ID:
-    print("⚠️ UYARI: ENV bilgileri eksik olabilir! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
+    print("❌ HATA: ENV bilgileri eksik! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
+    # sys.exit(1) 
 
 # Gemini Client
 try:
     client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 except:
-    client = None
     print("⚠️ Gemini Client başlatılamadı.")
 
 bot = Bot(token=TOKEN)
 
 exchange_config = {
     'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}
+    'options': {'defaultType': 'spot'} 
 }
 
-# BACKTEST DOSYASINDAN GELEN LISTE
+# TITANIUM COIN LISTESI
 COIN_LIST = [
     "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
     "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
@@ -56,15 +54,14 @@ RSS_LIST = [
     "https://decrypt.co/feed"
 ]
 
-# TITANIUM V1 AYARLARI
-KAR_HEDEFI_ORAN = 0.025  # %2.5
-ZARAR_DURDUR_ORAN = 0.06 # %6.0
-
 SON_SINYAL_ZAMANI = {}
 
 # ==========================================
 # 🧮 BÖLÜM 1: İNDİKATÖRLER
 # ==========================================
+def calculate_ema(series, span):
+    return series.ewm(span=span, adjust=False).mean()
+
 def calculate_sma(series, window):
     return series.rolling(window=window).mean()
 
@@ -78,36 +75,37 @@ def calculate_rsi(series, period=14):
 # ==========================================
 # 🎨 BÖLÜM 2: GRAFİK
 # ==========================================
-def _grafik_olustur_sync(coin, df_gelen, tp_price, sl_price, signal_type):
+def _grafik_olustur_sync(coin, df_gelen, tp, sl, yon):
     try:
         df = df_gelen.copy()
-        
         apds = [
-            mpf.make_addplot(df['sma50'], panel=0, color='#2962FF', width=1.0, linestyle='-'),
-            mpf.make_addplot(df['sma200'], panel=0, color='#FF6D00', width=1.5, linestyle='--'),
-            mpf.make_addplot(df['rsi'], panel=1, color='purple', width=1.0, ylabel='RSI')
+            mpf.make_addplot(df['sma50'], panel=0, color='cyan', width=0.8),
+            mpf.make_addplot(df['sma200'], panel=0, color='white', width=1.0),
+            mpf.make_addplot(df['rsi'], panel=1, color='#FF6D00', width=1.0, title="RSI")
         ]
+        
+        # RSI Referans Cizgileri
+        h_lines_rsi = dict(hlines=[30, 80], colors=['green', 'red'], linewidths=[0.5, 0.5], linestyle='--')
         
         buf = io.BytesIO()
         theme_color = '#131722'
         grid_color = '#363c4e'
         text_color = '#b2b5be'
-        
         my_style = mpf.make_mpf_style(
             base_mpf_style='binance', facecolor=theme_color, figcolor=theme_color, edgecolor=theme_color,
             gridcolor=grid_color, gridstyle=':', rc={'axes.labelcolor': text_color, 'xtick.color': text_color, 'ytick.color': text_color, 'text.color': text_color}
         )
         
         h_lines = dict(
-            hlines=[tp_price, sl_price], 
+            hlines=[tp, sl], 
             colors=['#00FF00', '#FF0000'],
-            linewidths=[1.5, 1.5], alpha=0.9, linestyle='--'
+            linewidths=[1.5, 1.5], alpha=0.9, linestyle='-.'
         )
         
-        title_str = f"\n{coin}/USDT - TITANIUM {signal_type}"
+        title_color = "#00FF00" if yon == "LONG" else "#FF0000"
         
         mpf.plot(
-            df, type='candle', style=my_style, title=title_str,
+            df, type='candle', style=my_style, title=f"\n{coin}/USDT - TITANIUM {yon}",
             ylabel='Fiyat ($)', ylabel_lower='RSI', addplot=apds, hlines=h_lines, volume=False,
             panel_ratios=(3, 1), savefig=dict(fname=buf, dpi=120, bbox_inches='tight', facecolor=theme_color)
         )
@@ -117,25 +115,47 @@ def _grafik_olustur_sync(coin, df_gelen, tp_price, sl_price, signal_type):
         print(f"Grafik Hatası: {e}")
         return None
 
-async def grafik_olustur_async(coin, df, tp, sl, signal_type):
+async def grafik_olustur_async(coin, df, tp, sl, yon):
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _grafik_olustur_sync, coin, df, tp, sl, signal_type)
+    return await loop.run_in_executor(None, _grafik_olustur_sync, coin, df, tp, sl, yon)
 
 # ==========================================
-# 🧠 BÖLÜM 3: YAPAY ZEKA
+# 📊 BÖLÜM 3: DB & SİNYAL YÖNETİMİ
 # ==========================================
-def db_baslat():
-    conn = sqlite3.connect("haber_hafizasi.db")
-    c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS gonderilenler (link TEXT PRIMARY KEY)")
-    conn.commit()
-    conn.close()
+def db_ilk_kurulum():
+    with sqlite3.connect("titanium_live.db") as conn:
+        # Islemler Tablosu
+        conn.execute("""CREATE TABLE IF NOT EXISTS islemler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            coin TEXT, yon TEXT, giris_fiyat REAL, tp REAL, sl REAL,
+            durum TEXT DEFAULT 'ACIK', pnl_yuzde REAL DEFAULT 0,
+            acilis_zamani DATETIME, kapanis_zamani DATETIME
+        )""")
+        
+        # Haberler Tablosu (Haber Hafızası)
+        conn.execute("CREATE TABLE IF NOT EXISTS haberler (link TEXT PRIMARY KEY)")
 
+def short_var_mi(coin):
+    """Bir coin icin acik SHORT islemi olup olmadigini kontrol eder (Sequential Short Kurali)"""
+    with sqlite3.connect("titanium_live.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT count(*) FROM islemler WHERE coin=? AND yon='SHORT' AND durum='ACIK'", (coin,))
+        count = c.fetchone()[0]
+        return count > 0
+
+def islem_kaydet(coin, yon, giris, tp, sl):
+    with sqlite3.connect("titanium_live.db") as conn:
+        conn.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp, sl, acilis_zamani) VALUES (?, ?, ?, ?, ?, ?)", 
+                  (coin, yon, giris, tp, sl, datetime.now()))
+
+# ==========================================
+# 🧠 BÖLÜM 4: AI HABER ANALİZİ (PREMIUM)
+# ==========================================
 def link_kontrol(link):
-    with sqlite3.connect("haber_hafizasi.db") as conn:
+    with sqlite3.connect("titanium_live.db") as conn:
         c = conn.cursor()
         try:
-            c.execute("INSERT INTO gonderilenler VALUES (?)", (link,))
+            c.execute("INSERT INTO haberler VALUES (?)", (link,))
             conn.commit()
             return True
         except sqlite3.IntegrityError:
@@ -158,7 +178,12 @@ async def ai_analiz(baslik, ozet):
     GÖREV: Aşağıdaki kripto haberini analiz et.
     HABER BAŞLIĞI: {baslik}
     HABER ÖZETİ: {ozet}
-    KURALLAR: 1. Çıktı formatına %100 sadık kal. 2. Skor -2 ile +2 arasında tam sayı olsun.
+    
+    KURALLAR:
+    1. Asla "Tamam", "Anlaşıldı" deme.
+    2. Çıktı formatına %100 sadık kal.
+    3. Skor -2 (Çok Kötü) ile +2 (Çok İyi) arasında tam sayı olsun.
+
     İSTENEN ÇIKTI FORMATI:
     ÖZET:[Tek bir emoji ile başlayan maksimum 2 cümlelik özet]
     SKOR:[Sadece Sayı]
@@ -167,7 +192,7 @@ async def ai_analiz(baslik, ozet):
     return await loop.run_in_executor(None, _ai_analiz_sync, prompt)
 
 async def haberleri_kontrol_et():
-    print("📰 Haberler taranıyor...")
+    print("� Haberler taranıyor (AI Analiz)...")
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
@@ -181,279 +206,216 @@ async def haberleri_kontrol_et():
                 clean_text = re.sub('<[^<]+?>', '', raw_summary)
                 
                 ai_text, skor = await ai_analiz(entry.title, clean_text[:500])
-                if abs(skor) < 2: continue 
+                if abs(skor) < 2: continue # Sadece onemli haberler
                 
                 skor_icon = "🟢" if skor > 0 else "🔴"
-                mesaj = f"""<b>{entry.title}</b>\n{ai_text}\n🎯 <b>Piyasa Etkisi:</b> {skor_icon} <b>({skor})</b>\n🔗 <a href='{entry.link}'>Kaynağa Git</a>"""
-                
+                mesaj = f"""
+<b>{entry.title}</b>
+
+{ai_text}
+
+🎯 <b>Piyasa Etkisi:</b> {skor_icon} <b>({skor})</b>
+🔗 <a href='{entry.link}'>Kaynağa Git</a>
+"""
                 try:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
                 except Exception as e:
-                    print(f"❌ HABER TELEGRAM HATASI: {e}")
+                    print(f"Haber Telegram Hatası: {e}")
                 await asyncio.sleep(2)
         except Exception as e:
             print(f"RSS Hatası: {e}")
 
 # ==========================================
-# 📊 BÖLÜM 4: RAPORLAMA VE DB
+# �🚀 BÖLÜM 5: STRATEJİ MOTORU (TITANIUM HYBRID V2)
 # ==========================================
-RAPOR_ZAMANI = datetime.now()
 
-def pnl_db_baslat():
-    with sqlite3.connect("titanium_trades.db") as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS islemler (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            coin TEXT, yon TEXT, giris_fiyat REAL, tp_price REAL, sl_price REAL,
-            durum TEXT DEFAULT 'ACIK', pnl_yuzde REAL DEFAULT 0,
-            acilis_zamani DATETIME DEFAULT CURRENT_TIMESTAMP,
-            kapanis_zamani DATETIME
-        )""")
-
-def islem_kaydet(coin, yon, giris, tp, sl):
-    with sqlite3.connect("titanium_trades.db") as conn:
-        conn.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp_price, sl_price) VALUES (?, ?, ?, ?, ?)", 
-                  (coin, yon, giris, tp, sl))
-
-def detayli_performans_analizi():
-    try:
-        with sqlite3.connect("titanium_trades.db") as conn:
-            df = pd.read_sql_query("SELECT * FROM islemler", conn)
-        
-        if df.empty:
-            print("\n📭 Veritabanı boş, henüz işlem açılmadı.\n")
-            return
-
-        print("\n" + "="*60)
-        print("📋 TITANIUM İŞLEM GEÇMİŞİ")
-        print("="*60)
-        ozet_df = df[['coin', 'yon', 'giris_fiyat', 'durum', 'pnl_yuzde']]
-        print(ozet_df.tail(10).to_string(index=False)) 
-        print("-" * 60)
-        
-        biten_islemler = df[df['durum'] != 'ACIK']
-        if len(biten_islemler) > 0:
-            kazanan = len(biten_islemler[biten_islemler['durum'] == 'KAZANDI'])
-            win_rate = (kazanan / len(biten_islemler)) * 100
-            toplam_pnl = biten_islemler['pnl_yuzde'].sum()
-            print(f"📊 İSTATİSTİKLER: Win Rate: %{win_rate:.2f} | Net PnL (Kümülatif %): %{toplam_pnl:.2f}")
-        else:
-            print("📊 Henüz sonuçlanmış işlem yok.")
-        print("="*60 + "\n")
-    except Exception as e:
-        print(f"Rapor Hatası: {e}")
-
-async def islemleri_kontrol_et(exchange):
-    with sqlite3.connect("titanium_trades.db") as conn:
-        c = conn.cursor()
-        c.execute("SELECT id, coin, yon, giris_fiyat, tp_price, sl_price FROM islemler WHERE durum='ACIK'")
-        acik_islemler = c.fetchall()
+async def piyasayi_tarama(exchange):
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM HYBRID SCAN...")
     
+    # 1. COIN VERILERINI CEK (Async gather)
+    async def fetch_candle(s):
+        try:
+            ohlcv = await exchange.fetch_ohlcv(f"{s}/USDT", '1h', limit=300)
+            return s, ohlcv
+        except: return s, None
+
+    tasks = [fetch_candle(c) for c in COIN_LIST]
+    results = await asyncio.gather(*tasks)
+    
+    for coin, bars in results:
+        if not bars: continue
+        
+        df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        df['date'] = pd.to_datetime(df['date'], unit='ms')
+        df.set_index('date', inplace=True)
+        
+        # Indikatorler
+        df['sma50'] = calculate_sma(df['close'], 50)
+        df['sma200'] = calculate_sma(df['close'], 200)
+        df['rsi'] = calculate_rsi(df['close'])
+        
+        curr = df.iloc[-1]
+        price = curr['close']
+        rsi_val = curr['rsi']
+        
+        # --- TITANIUM STRATEJI MANTIGI ---
+        
+        trend_bullish = curr['sma50'] > curr['sma200']
+        trend_bearish = curr['sma50'] < curr['sma200']
+        rally_mode = price > curr['sma50']
+        
+        sinyal = None
+        setup = ""
+        tp_rate = 0.0
+        sl_rate = 0.0
+        
+        # --- STRATEJI 1: LONG (Premium Logic - Pyramiding Allowed) ---
+        # Kosul: Trend Bullish VE Fiyat > SMA200 VE RSI < 30 (Dip)
+        if trend_bullish and (price > curr['sma200']) and (rsi_val < 30):
+            # Son 2 saatte ayni coine sinyal attik mi? (Spam onleme)
+            if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
+                pass
+            else:
+                sinyal = "LONG"
+                setup = "Trend Pullback (Titanium Long V2 - High WR)"
+                tp_rate = 0.030 # %3.0 (Optimize)
+                sl_rate = 0.060 # %6.0 (Optimize)
+        
+        # --- STRATEJI 2: SHORT (Sniper Logic - Sequential Constraint) ---
+        # Kosul: Trend Bearish VE Ralli Modu (SMA50 ustu) VE RSI > 80 (Asiri Siskin)
+        elif trend_bearish and rally_mode and (rsi_val > 80):
+            # KISITLAMA: Eger zaten acik bir Short varsa, yenisini acma!
+            if short_var_mi(coin):
+                print(f"🚫 {coin} Short Sinyali Engellendi (Zaten Acik Pozisyon Var)")
+            else:
+                 if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
+                    pass
+                 else:
+                    sinyal = "SHORT"
+                    setup = "RSI Sniper Reversal (Titanium Short)"
+                    tp_rate = 0.035 # %3.5
+                    sl_rate = 0.060 # %6.0
+        
+        # SINYAL ISLEME
+        if sinyal:
+            tp_price = price * (1 + tp_rate) if sinyal == "LONG" else price * (1 - tp_rate)
+            sl_price = price * (1 - sl_rate) if sinyal == "LONG" else price * (1 + sl_rate)
+            
+            p_fmt = ".8f" if price < 0.01 else ".4f"
+            
+            islem_kaydet(coin, sinyal, price, tp_price, sl_price)
+            SON_SINYAL_ZAMANI[coin] = datetime.now()
+            
+            print(f"🎯 {sinyal} SINYALI: {coin} (RSI: {rsi_val:.1f})")
+            
+            resim = await grafik_olustur_async(coin, df.tail(100), tp_price, sl_price, sinyal)
+            
+            ikon = "🟢" if sinyal == "LONG" else "🔴"
+            mesaj = f"""
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #QUANT
+
+🪙 <b>Coin:</b> #{coin}
+📉 <b>Setup:</b> {setup}
+📊 <b>RSI:</b> {rsi_val:.1f}
+
+💰 <b>Giriş:</b> ${price:{p_fmt}}
+🎯 <b>HEDEF (TP):</b> ${tp_price:{p_fmt}} (%{tp_rate*100})
+🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}}
+
+⚠️ <i>Limit Emir Kullanın!</i>
+""" 
+            try:
+                if resim:
+                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
+                else:
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                print(f"Telegram Hatasi: {e}")
+
+# ==========================================
+# 🛡️ BÖLÜM 6: POZİSYON TAKİBİ
+# ==========================================
+async def pozisyonlari_yokla(exchange):
+    with sqlite3.connect("titanium_live.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT id, coin, yon, giris_fiyat, tp, sl FROM islemler WHERE durum='ACIK'")
+        acik_islemler = c.fetchall()
+        
     if not acik_islemler: return
 
     for islem in acik_islemler:
         id, coin, yon, giris, tp, sl = islem
         try:
-            ticker = await exchange.fetch_ticker(f"{coin}/USDT") 
+            ticker = await exchange.fetch_ticker(f"{coin}/USDT")
             fiyat = ticker['last']
-            sonuc, pnl = None, 0
-            sebep = ""
-
+            sonuc = None
+            pnl_yuzde = 0.0
+            
             if yon == "LONG":
-                if fiyat >= tp: 
-                    sonuc, pnl = "KAZANDI", ((tp-giris)/giris)*100
-                    sebep = "TP Hedefi 🎯"
-                elif fiyat <= sl: 
-                    sonuc, pnl = "KAYBETTI", ((sl-giris)/giris)*100
-                    sebep = "Stop Loss 🛑"
+                if fiyat >= tp:
+                    sonuc = "KAZANDI"
+                    pnl_yuzde = 3.0
+                elif fiyat <= sl:
+                    sonuc = "KAYBETTI"
+                    pnl_yuzde = -6.0
             elif yon == "SHORT":
-                if fiyat <= tp: 
-                    sonuc, pnl = "KAZANDI", ((giris-tp)/giris)*100
-                    sebep = "TP Hedefi 🎯"
-                elif fiyat >= sl: 
-                    sonuc, pnl = "KAYBETTI", ((giris-sl)/giris)*100
-                    sebep = "Stop Loss 🛑"
-
+                if fiyat <= tp:
+                    sonuc = "KAZANDI"
+                    pnl_yuzde = 3.5
+                elif fiyat >= sl:
+                    sonuc = "KAYBETTI"
+                    pnl_yuzde = -6.0
+            
             if sonuc:
-                with sqlite3.connect("titanium_trades.db") as conn:
+                with sqlite3.connect("titanium_live.db") as conn:
                     conn.execute("UPDATE islemler SET durum=?, pnl_yuzde=?, kapanis_zamani=? WHERE id=?", 
-                              (sonuc, pnl, datetime.now(), id))
+                              (sonuc, pnl_yuzde, datetime.now(), id))
                 
                 ikon = "✅" if sonuc == "KAZANDI" else "❌"
-                renk = "🟢" if sonuc == "KAZANDI" else "🔴"
                 p_fmt = ".8f" if fiyat < 0.01 else ".4f"
-
+                
                 mesaj = f"""
-🏁 <b>TITANIUM POZİSYON KAPANDI</b> {ikon}
+🏁 <b>POZİSYON KAPANDI</b> {ikon}
 
-🪙 <b>Coin:</b> #{coin}
-📊 <b>Yön:</b> {yon} {renk}
-🏷️ <b>Durum:</b> {sonuc} ({sebep})
+🪙 <b>#{coin}</b> ({yon})
+🏷️ <b>Sonuç:</b> {sonuc}
 
 💰 <b>Giriş:</b> ${giris:{p_fmt}}
 🚪 <b>Çıkış:</b> ${fiyat:{p_fmt}}
-📉 <b>Kâr/Zarar:</b> %{pnl:.2f}
+📉 <b>Kâr/Zarar:</b> %{pnl_yuzde}
+
+🤖 <i>Titanium Bot</i>
 """
-                try:
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                except Exception as e:
-                    print(f"❌ KAPANIŞ MESAJI TELEGRAM HATASI: {e}")
-                
-                detayli_performans_analizi()
-        except Exception as e: 
-            print(f"İşlem Kontrol Hatası ({coin}): {e}")
-            continue
+                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+        except: continue
 
 # ==========================================
-# 🚀 BÖLÜM 5: TEKNİK ANALİZ (DÜZELTİLDİ)
-# ==========================================
-
-async def get_ohlcv_safe(exchange, symbol):
-    try:
-        return symbol, await exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
-    except Exception as e:
-        if '451' in str(e) or 'restricted' in str(e).lower(): 
-            print(f"⚠️ {symbol} için erişim engeli (451 Restricted).")
-        else: 
-            print(f"⚠️ Veri çekme hatası ({symbol}): {e}")
-        return symbol, None
-
-async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM TARAMA (KUCOIN - PARALEL)...")
-    su_an = datetime.now()
-
-    tasks = [get_ohlcv_safe(exchange, f"{coin}/USDT") for coin in COIN_LIST]
-    results = await asyncio.gather(*tasks)
-
-    for symbol_pair, bars in results:
-        if not symbol_pair or not bars: 
-            continue
-        
-        coin = symbol_pair.split('/')[0]
-        
-        # Spam kontrolü (4 saat)
-        if coin in SON_SINYAL_ZAMANI:
-            if (su_an - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=4): continue 
-        
-        if len(bars) < 210: 
-            # print(f"⚠️ {coin} için yetersiz veri: {len(bars)}")
-            continue
-
-        try:
-            df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-            df['date'] = pd.to_datetime(df['date'], unit='ms')
-            df.set_index('date', inplace=True)
-
-            df['sma50'] = calculate_sma(df['close'], 50)
-            df['sma200'] = calculate_sma(df['close'], 200)
-            df['rsi'] = calculate_rsi(df['close'])
-            
-            curr = df.iloc[-1]
-            price = curr['close']
-            rsi_val = curr['rsi']
-            
-            trend_bullish = curr['sma50'] > curr['sma200']
-            trend_bearish = curr['sma50'] < curr['sma200']
-            
-            # --- DEBUG LOGU ---
-            yon_debug = "BULL" if trend_bullish else "BEAR"
-            print(f"👀 {coin}: Fiyat={price:.2f} | RSI={rsi_val:.1f} | Trend={yon_debug}")
-            
-            # --- STRATEJİ (ESNETİLDİ: 35/65) ---
-            oversold = rsi_val < 35
-            overbought = rsi_val > 65
-            
-            above_trend = price > curr['sma200']
-            below_trend = price < curr['sma200']
-            
-            yon = None
-            setup_reason = ""
-            
-            # 🛠️ TELEGRAM HTML HATASI DÜZELTİLDİ (< ve > kaldırıldı)
-            if trend_bullish and oversold and above_trend:
-                yon = "LONG"
-                setup_reason = "Bull Trend - RSI Dip (35 Alti) - Fiyat SMA200 Uzeri"
-            elif trend_bearish and overbought and below_trend:
-                yon = "SHORT"
-                setup_reason = "Bear Trend - RSI Tepe (65 Ustu) - Fiyat SMA200 Alti"
-            
-            if yon:
-                if yon == "LONG":
-                    tp_price = price * (1 + KAR_HEDEFI_ORAN)
-                    sl_price = price * (1 - ZARAR_DURDUR_ORAN)
-                else: 
-                    tp_price = price * (1 - KAR_HEDEFI_ORAN)
-                    sl_price = price * (1 + ZARAR_DURDUR_ORAN)
-                
-                SON_SINYAL_ZAMANI[coin] = su_an
-                islem_kaydet(coin, yon, price, tp_price, sl_price)
-                print(f"🎯 Sinyal YAKALANDI: {coin} -> {yon}")
-                
-                resim = await grafik_olustur_async(coin, df.tail(100), tp_price, sl_price, yon)
-                p_fmt = ".8f" if price < 0.01 else ".4f"
-                
-                mesaj = f"""
-⚡ <b>TITANIUM V1 SİNYAL</b> (Live)
-🪙 <b>#{coin}</b>
-📊 <b>Yön:</b> {yon}
-📉 <b>Sebep:</b> {setup_reason}
-
-💰 <b>Fiyat:</b> ${price:{p_fmt}}
-🎯 <b>Hedef:</b> ${tp_price:{p_fmt}} (%2.5)
-🛑 <b>Stop:</b> ${sl_price:{p_fmt}} (%6.0)
-ℹ️ <b>RSI:</b> {rsi_val:.1f}
-
-🤖 <i>Auto-Trade System</i>
-"""
-                try:
-                    if resim:
-                        await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
-                    else:
-                        await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                except Exception as e:
-                    print(f"❌ TELEGRAM SİNYAL HATASI: {e}")
-
-        except Exception as e:
-            print(f"⚠️ Analiz Hatası ({coin}): {e}")
-            continue
-
-# ==========================================
-# 🏁 MAIN (KUCOIN AKTİF)
+# 🏁 MAIN LOOP
 # ==========================================
 async def main():
-    db_baslat()
-    pnl_db_baslat()
-    global RAPOR_ZAMANI
-    
-    # KUCOIN AKTİF
-    exchange = ccxt.kucoin(exchange_config)
-    print("🚀 TITANIUM BOT Aktif! (Live Monitor - KuCoin)")
-    detayli_performans_analizi()
-    
-    sayac = 0
+    db_ilk_kurulum()
+    print("🚀 Titanium PREMIUM Bot Aktif! (Telegram: Sinyal + Haber)")
+    exchange = ccxt.binance(exchange_config)
     try:
         while True:
-            # Haber analiz modülü (isteğe bağlı açabilirsin)
-            # await haberleri_kontrol_et()
+            # 1. Haberleri Kontrol Et (AI)
+            await haberleri_kontrol_et()
             
+            # 2. Piyasayi Tara (Trade)
             await piyasayi_tarama(exchange)
-            await islemleri_kontrol_et(exchange)
             
-            if (datetime.now() - RAPOR_ZAMANI) > timedelta(hours=24):
-                detayli_performans_analizi()
-                RAPOR_ZAMANI = datetime.now()
+            # 3. Pozisyonlari Takip Et
+            await pozisyonlari_yokla(exchange)
             
-            sayac += 1
-            print(f"💤 Bekleme... (Döngü: {sayac})")
-            await asyncio.sleep(60) 
+            print("💤 Bekleme (5dk)...")
+            await asyncio.sleep(300) 
     except KeyboardInterrupt:
-        print("\n🛑 Bot Durduruluyor...")
+        print("🛑 Bot Durduruluyor...")
     finally:
         await exchange.close()
-        print("🔌 Bağlantılar kapatıldı.")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-                
