@@ -55,6 +55,7 @@ RSS_LIST = [
 ]
 
 SON_SINYAL_ZAMANI = {}
+SON_RAPOR_TARIHI = None  # Günlük rapor kontrolü için eklendi
 
 # ==========================================
 # 🧮 BÖLÜM 1: İNDİKATÖRLER
@@ -149,6 +150,72 @@ def islem_kaydet(coin, yon, giris, tp, sl):
                   (coin, yon, giris, tp, sl, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
 # ==========================================
+# 📊 YENİ EKLENEN BÖLÜM: GÜNLÜK RAPORLAMA
+# ==========================================
+async def gunluk_rapor_gonder():
+    """Günün kapanan işlemlerini analiz eder, terminale basar ve Telegram'a atar."""
+    try:
+        bugun = datetime.now().strftime("%Y-%m-%d")
+        print(f"📊 {bugun} Günlük Rapor Hazırlanıyor...")
+
+        with sqlite3.connect("titanium_live.db") as conn:
+            # Sadece bugun KAPANAN islemleri al (durumu KAZANDI veya KAYBETTI olanlar)
+            # SQL'de tarih karsilastirmasi icin substr kullaniyoruz veya date()
+            query = """
+            SELECT coin, yon, durum, pnl_yuzde, kapanis_zamani 
+            FROM islemler 
+            WHERE durum IN ('KAZANDI', 'KAYBETTI') 
+            AND date(kapanis_zamani) = ?
+            """
+            df_rapor = pd.read_sql_query(query, conn, params=(bugun,))
+
+        if df_rapor.empty:
+            print("ℹ️ Bugün kapanan işlem yok.")
+            return
+
+        # --- 1. TERMINAL ÇIKTISI (Pandas Tablosu) ---
+        print("\n" + "="*40)
+        print(f"      GÜNLÜK RAPOR - {bugun}")
+        print("="*40)
+        print(df_rapor[['coin', 'yon', 'durum', 'pnl_yuzde']].to_string(index=False))
+        print("-" * 40)
+        
+        toplam_pnl = df_rapor['pnl_yuzde'].sum()
+        win_count = len(df_rapor[df_rapor['durum'] == 'KAZANDI'])
+        total_count = len(df_rapor)
+        win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
+        
+        print(f"Toplam İşlem: {total_count}")
+        print(f"Win Rate: %{win_rate:.2f}")
+        print(f"NET PNL: %{toplam_pnl:.2f}")
+        print("="*40 + "\n")
+
+        # --- 2. TELEGRAM ÇIKTISI (HTML Tablo Görünümü) ---
+        pnl_ikon = "✅" if toplam_pnl > 0 else "🔻"
+        
+        mesaj = f"📅 <b>GÜNLÜK PERFORMANS RAPORU ({bugun})</b>\n\n"
+        mesaj += "<code>Coin   | Yön   | Sonuç   | PNL</code>\n"
+        mesaj += "<code>-------|-------|---------|------</code>\n"
+        
+        for index, row in df_rapor.iterrows():
+            coin_kisa = row['coin'][:4] # Ismi kisalt tablo kaymasin
+            durum_ikon = "W" if row['durum'] == 'KAZANDI' else "L"
+            pnl_val = row['pnl_yuzde']
+            mesaj += f"<code>{coin_kisa:<6} | {row['yon']:<5} | {durum_ikon:<7} | %{pnl_val:.1f}</code>\n"
+            
+        mesaj += "\n" + "-"*25 + "\n"
+        mesaj += f"🔢 <b>Toplam İşlem:</b> {total_count}\n"
+        mesaj += f"🎯 <b>Başarı Oranı:</b> %{win_rate:.1f}\n"
+        mesaj += f"💰 <b>GÜNLÜK NET PNL:</b> {pnl_ikon} <b>%{toplam_pnl:.2f}</b>\n"
+        mesaj += "\n🤖 <i>Titanium Premium Bot</i>"
+
+        await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+        print("✅ Günlük rapor Telegram'a iletildi.")
+
+    except Exception as e:
+        print(f"❌ Günlük Rapor Hatası: {e}")
+
+# ==========================================
 # 🧠 BÖLÜM 4: AI HABER ANALİZİ (PREMIUM)
 # ==========================================
 def link_kontrol(link):
@@ -192,7 +259,7 @@ async def ai_analiz(baslik, ozet):
     return await loop.run_in_executor(None, _ai_analiz_sync, prompt)
 
 async def haberleri_kontrol_et():
-    print("� Haberler taranıyor (AI Analiz)...")
+    print("📰 Haberler taranıyor (AI Analiz)...")
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
@@ -226,7 +293,7 @@ async def haberleri_kontrol_et():
             print(f"RSS Hatası: {e}")
 
 # ==========================================
-# �🚀 BÖLÜM 5: STRATEJİ MOTORU (TITANIUM HYBRID V2)
+# 🚀 BÖLÜM 5: STRATEJİ MOTORU (TITANIUM HYBRID V2)
 # ==========================================
 
 async def piyasayi_tarama(exchange):
@@ -380,7 +447,7 @@ async def pozisyonlari_yokla(exchange):
             if sonuc:
                 with sqlite3.connect("titanium_live.db") as conn:
                     conn.execute("UPDATE islemler SET durum=?, pnl_yuzde=?, kapanis_zamani=? WHERE id=?", 
-                              (sonuc, pnl_yuzde, datetime.now(), id))
+                              (sonuc, pnl_yuzde, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
                 
                 ikon = "✅" if sonuc == "KAZANDI" else "❌"
                 p_fmt = ".8f" if fiyat < 0.01 else ".4f"
@@ -404,16 +471,16 @@ async def pozisyonlari_yokla(exchange):
 # 🏁 MAIN LOOP
 # ==========================================
 async def main():
+    global SON_RAPOR_TARIHI
     db_ilk_kurulum()
     print("🚀 Titanium PREMIUM Bot Aktif! (Telegram: Sinyal + Haber)")
-    print("🚀 Titanium PREMIUM Bot Aktif! (Telegram: Sinyal + Haber)")
+    
     # KUCOIN GEÇİŞİ (Railway Block Bypass)
     exchange = ccxt.kucoin(exchange_config)
-    print("🚀 Titanium PREMIUM Bot Aktif! (Telegram: Sinyal + Haber)")
     
     # 📢 Railway Debug: Baslangic Mesaji At
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT BAŞLATILDI! (KUCOIN)**\n\n✅ Sistem: Aktif\n✅ Borsa: KuCoin (Railway Fix)\n✅ Tarama: 1 Dakika", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT BAŞLATILDI! (KUCOIN)**\n\n✅ Sistem: Aktif\n✅ Borsa: KuCoin (Railway Fix)\n✅ Tarama: 1 Dakika\n📊 Günlük Rapor: Aktif (23:55)", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
@@ -423,6 +490,15 @@ async def main():
 
     try:
         while True:
+            # --- ZAMAN KONTROLÜ (GÜNLÜK RAPOR) ---
+            simdi = datetime.now()
+            bugun_str = simdi.strftime("%Y-%m-%d")
+            
+            # Eğer saat 23:55 veya sonrasıysa VE bugün rapor atılmadıysa
+            if simdi.hour == 23 and simdi.minute >= 55 and SON_RAPOR_TARIHI != bugun_str:
+                await gunluk_rapor_gonder()
+                SON_RAPOR_TARIHI = bugun_str # Bugunun raporu atildi olarak isaretle
+            
             # 1. Haberleri Kontrol Et (AI)
             await haberleri_kontrol_et()
             
