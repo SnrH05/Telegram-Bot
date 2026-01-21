@@ -1,4 +1,4 @@
-import feedparser
+import feedparser  # <-- İstenilen import eklendi
 import asyncio
 import os
 import sys
@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V3: TREND + AI + MACRO) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V4: SCORING SYSTEM) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -58,7 +58,7 @@ SON_SINYAL_ZAMANI = {}
 SON_RAPOR_TARIHI = None 
 
 # ==========================================
-# 🧮 BÖLÜM 1: İNDİKATÖRLER (GÜNCELLENDİ)
+# 🧮 BÖLÜM 1: İNDİKATÖRLER
 # ==========================================
 def calculate_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
@@ -73,13 +73,8 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- YENİ EKLENEN: ADX (TREND GÜCÜ) ---
+# ADX İndikatörü (Trend Gücü Ölçer)
 def calculate_adx(df, period=14):
-    """
-    ADX Hesaplar. 
-    ADX > 20-25 ise Trend var demektir.
-    ADX < 20 ise Piyasa yataydır.
-    """
     df = df.copy()
     df['h-l'] = df['high'] - df['low']
     df['h-pc'] = abs(df['high'] - df['close'].shift(1))
@@ -114,7 +109,6 @@ def _grafik_olustur_sync(coin, df_gelen, tp, sl, yon):
             mpf.make_addplot(df['rsi'], panel=1, color='#FF6D00', width=1.0, title="RSI")
         ]
         
-        # RSI Referans Cizgileri
         h_lines_rsi = dict(hlines=[30, 80], colors=['green', 'red'], linewidths=[0.5, 0.5], linestyle='--')
         
         buf = io.BytesIO()
@@ -131,8 +125,6 @@ def _grafik_olustur_sync(coin, df_gelen, tp, sl, yon):
             colors=['#00FF00', '#FF0000'],
             linewidths=[1.5, 1.5], alpha=0.9, linestyle='-.'
         )
-        
-        title_color = "#00FF00" if yon == "LONG" else "#FF0000"
         
         mpf.plot(
             df, type='candle', style=my_style, title=f"\n{coin}/USDT - TITANIUM {yon}",
@@ -189,34 +181,23 @@ async def gunluk_rapor_gonder():
             df_rapor = pd.read_sql_query(query, conn, params=(bugun,))
 
         if df_rapor.empty:
-            print("ℹ️ Bugün kapanan işlem yok.")
             return
 
         toplam_pnl = df_rapor['pnl_yuzde'].sum()
         win_count = len(df_rapor[df_rapor['durum'] == 'KAZANDI'])
         total_count = len(df_rapor)
         win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
-        
         pnl_ikon = "✅" if toplam_pnl > 0 else "🔻"
         
-        mesaj = f"📅 <b>GÜNLÜK PERFORMANS RAPORU ({bugun})</b>\n\n"
-        mesaj += "<code>Coin   | Yön   | Sonuç   | PNL</code>\n"
-        mesaj += "<code>-------|-------|---------|------</code>\n"
-        
+        mesaj = f"📅 <b>GÜNLÜK RAPOR ({bugun})</b>\n\n"
         for index, row in df_rapor.iterrows():
-            coin_kisa = row['coin'][:4] 
             durum_ikon = "W" if row['durum'] == 'KAZANDI' else "L"
-            pnl_val = row['pnl_yuzde']
-            mesaj += f"<code>{coin_kisa:<6} | {row['yon']:<5} | {durum_ikon:<7} | %{pnl_val:.1f}</code>\n"
+            mesaj += f"<code>{row['coin'][:4]:<5} | {row['yon'][0]:<1} | {durum_ikon} | %{row['pnl_yuzde']:.1f}</code>\n"
             
-        mesaj += "\n" + "-"*25 + "\n"
-        mesaj += f"🔢 <b>Toplam İşlem:</b> {total_count}\n"
-        mesaj += f"🎯 <b>Başarı Oranı:</b> %{win_rate:.1f}\n"
-        mesaj += f"💰 <b>GÜNLÜK NET PNL:</b> {pnl_ikon} <b>%{toplam_pnl:.2f}</b>\n"
-        mesaj += "\n🤖 <i>Titanium Premium Bot</i>"
+        mesaj += f"\n🔢 <b>Toplam:</b> {total_count} | 🎯 <b>WR:</b> %{win_rate:.0f}"
+        mesaj += f"\n💰 <b>NET PNL:</b> {pnl_ikon} <b>%{toplam_pnl:.2f}</b>"
 
         await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-        print("✅ Günlük rapor Telegram'a iletildi.")
 
     except Exception as e:
         print(f"❌ Günlük Rapor Hatası: {e}")
@@ -247,25 +228,12 @@ def _ai_analiz_sync(prompt):
         return "Analiz yapılamadı.", 0
 
 async def ai_analiz(baslik, ozet):
-    prompt = f"""
-    GÖREV: Aşağıdaki kripto haberini analiz et.
-    HABER BAŞLIĞI: {baslik}
-    HABER ÖZETİ: {ozet}
-    
-    KURALLAR:
-    1. Asla "Tamam", "Anlaşıldı" deme.
-    2. Çıktı formatına %100 sadık kal.
-    3. Skor -2 (Çok Kötü) ile +2 (Çok İyi) arasında tam sayı olsun.
-
-    İSTENEN ÇIKTI FORMATI:
-    ÖZET:[Tek bir emoji ile başlayan maksimum 2 cümlelik özet]
-    SKOR:[Sadece Sayı]
-    """
+    prompt = f"GÖREV: Haber analizi.\nBAŞLIK: {baslik}\nÖZET: {ozet}\nFORMAT:\nÖZET:[Kısa özet]\nSKOR:[-2 ile +2 arası tamsayı]"
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _ai_analiz_sync, prompt)
 
 async def haberleri_kontrol_et():
-    print("📰 Haberler taranıyor (AI Analiz)...")
+    print("📰 Haberler taranıyor...")
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
@@ -275,68 +243,94 @@ async def haberleri_kontrol_et():
                     t = datetime.fromtimestamp(time.mktime(entry.published_parsed))
                     if (datetime.now() - t) > timedelta(minutes=45): continue
                 
-                raw_summary = entry.get("summary", entry.get("description", ""))
-                clean_text = re.sub('<[^<]+?>', '', raw_summary)
-                
+                clean_text = re.sub('<[^<]+?>', '', entry.get("summary", ""))
                 ai_text, skor = await ai_analiz(entry.title, clean_text[:500])
                 if abs(skor) < 2: continue
                 
                 skor_icon = "🟢" if skor > 0 else "🔴"
-                mesaj = f"""
-<b>{entry.title}</b>
-
-{ai_text}
-
-🎯 <b>Piyasa Etkisi:</b> {skor_icon} <b>({skor})</b>
-🔗 <a href='{entry.link}'>Kaynağa Git</a>
-"""
+                mesaj = f"<b>{entry.title}</b>\n\n{ai_text}\n\n🎯 <b>Etki:</b> {skor_icon} <b>({skor})</b>\n🔗 <a href='{entry.link}'>Link</a>"
                 try:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-                except Exception as e:
-                    print(f"Haber Telegram Hatası: {e}")
+                except: pass
                 await asyncio.sleep(2)
-        except Exception as e:
-            print(f"RSS Hatası: {e}")
+        except: pass
 
 # ==========================================
-# 🚀 BÖLÜM 5: STRATEJİ MOTORU (GÜNCELLENDİ)
+# 🚀 BÖLÜM 5: STRATEJİ MOTORU (PUANLAMA SİSTEMİ EKLENDİ)
 # ==========================================
 
-# --- YENİ EKLENEN: BTC TREND KONTROLÜ ---
-async def btc_trend_kontrol(exchange):
+async def btc_piyasa_puani_hesapla(exchange):
     """
-    Genel Piyasa Yönünü (BTC) belirler.
-    BTC SMA50 > SMA200 ise BULL, değilse BEAR döner.
+    BTC için -2.0 ile +2.0 arasında bir piyasa puanı döndürür.
+    Hesaplama Mantığı:
+    1. SMA 200 (Ana Trend): +1 / -1
+    2. SMA 50 (Kısa Trend): +0.5 / -0.5
+    3. RSI 50 (Momentum):   +0.5 / -0.5
     """
     try:
-        # BTC verisini çek
+        # BTC verisini çek (Son 210 mum yeterli)
         ohlcv = await exchange.fetch_ohlcv("BTC/USDT", '1h', limit=210)
-        if not ohlcv: return "NEUTRAL"
+        if not ohlcv: return 0
         
         df = pd.DataFrame(ohlcv, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # Son değerleri al
+        price = df['close'].iloc[-1]
         sma50 = df['close'].rolling(50).mean().iloc[-1]
         sma200 = df['close'].rolling(200).mean().iloc[-1]
+        rsi = calculate_rsi(df['close']).iloc[-1]
         
-        return "BULL" if sma50 > sma200 else "BEAR"
+        score = 0.0
+        
+        # --- PUANLAMA MOTORU ---
+        
+        # 1. KRİTER: ANA TREND (SMA 200) - Ağırlık: 1 Puan
+        # Boğa piyasasının en temel göstergesi
+        if price > sma200:
+            score += 1.0
+        else:
+            score -= 1.0
+            
+        # 2. KRİTER: KISA TREND (SMA 50) - Ağırlık: 0.5 Puan
+        # Kısa vadeli düzeltmeleri anlamak için
+        if price > sma50:
+            score += 0.5
+        else:
+            score -= 0.5
+            
+        # 3. KRİTER: MOMENTUM (RSI 50) - Ağırlık: 0.5 Puan
+        # Alıcılar mı satıcılar mı baskın?
+        if rsi > 50:
+            score += 0.5
+        else:
+            score -= 0.5
+            
+        return score
     except Exception as e:
-        print(f"⚠️ BTC Trend Kontrol Hatası: {e}")
-        return "NEUTRAL"
+        print(f"⚠️ BTC Puan Hatası: {e}")
+        return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM HYBRID V3 SCAN...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V4 SCANNING...")
     
-    # 1. ÖNCE GENEL PİYASA YÖNÜNE BAK (BTC MASTER FILTER)
-    genel_trend = await btc_trend_kontrol(exchange)
-    print(f"🌍 GENEL PİYASA (BTC): {genel_trend}")
+    # 1. ÖNCE BTC PUANINI HESAPLA (MASTER FILTRE)
+    btc_score = await btc_piyasa_puani_hesapla(exchange)
+    
+    # Skora göre görsel ikon belirle
+    if btc_score >= 1.5: btc_ikon = "🟢🟢 (Güçlü Bull)"
+    elif btc_score >= 0.5: btc_ikon = "🟢 (Bull)"
+    elif btc_score <= -1.5: btc_ikon = "🔴🔴 (Güçlü Bear)"
+    elif btc_score <= -0.5: btc_ikon = "🔴 (Bear)"
+    else: btc_ikon = "⚪ (Nötr)"
+
+    print(f"🌍 BTC SKORU: {btc_score} -> {btc_ikon}")
     
     # 2. COIN VERILERINI CEK
     async def fetch_candle(s):
         try:
             ohlcv = await exchange.fetch_ohlcv(f"{s}/USDT", '1h', limit=300)
             return s, ohlcv
-        except Exception as e:
-            print(f"❌ Veri Hatası ({s}): {e}")
-            return s, None
+        except: return s, None
 
     tasks = [fetch_candle(c) for c in COIN_LIST]
     results = await asyncio.gather(*tasks)
@@ -348,76 +342,55 @@ async def piyasayi_tarama(exchange):
         df['date'] = pd.to_datetime(df['date'], unit='ms')
         df.set_index('date', inplace=True)
         
-        # --- İNDİKATÖRLER ---
+        # İndikatörleri Hesapla
         df['sma50'] = calculate_sma(df['close'], 50)
         df['sma200'] = calculate_sma(df['close'], 200)
         df['rsi'] = calculate_rsi(df['close'])
-        
-        # 🔥 YENİ: ADX Hesapla (Trend Gücü)
         df['adx'] = calculate_adx(df)
         
         curr = df.iloc[-1]
         price = curr['close']
         rsi_val = curr['rsi']
-        adx_val = curr['adx'] # Yeni ADX değeri
+        adx_val = curr['adx']
         
-        # --- STRATEJİ MANTIKLARI ---
-        
-        # 1. Coin Kendi Trendi
-        coin_bullish = curr['sma50'] > curr['sma200']
-        coin_bearish = curr['sma50'] < curr['sma200']
-        rally_mode = price > curr['sma50']
-        
-        # 2. Trend Güçlü Mü? (ADX Filtresi)
-        # ADX 25'in altındaysa piyasa yataydır, işlem açma.
+        # Trend Gücü Filtresi (Yatay piyasada işlem açma)
         trend_guclu = adx_val > 25
-        
-        # Debug Logu
-        # print(f"👀 {coin}: RSI={rsi_val:.1f} | ADX={adx_val:.1f} | BTC={genel_trend}")
         
         sinyal = None
         setup = ""
         tp_rate = 0.0
         sl_rate = 0.0
         
-        # --- STRATEJİ 1: LONG (MACRO DESTEKLİ) ---
-        # Şartlar:
-        # 1. BTC Bullish OLACAK (Piyasa arkanda)
-        # 2. Coin Bullish OLACAK (SMA50 > SMA200)
-        # 3. Trend Güçlü OLACAK (ADX > 25)
-        # 4. Pullback Fırsatı (Fiyat > SMA200 ama RSI < 35 DİPTE)
-        
-        if (genel_trend == "BULL") and coin_bullish and trend_guclu and (price > curr['sma200']) and (rsi_val < 35):
+        # --- STRATEJİ 1: LONG (SCORING BASED) ---
+        # BTC Skoru en az +1.0 (Boğa) olmalı.
+        # Nötr (0.0) veya negatif piyasada Long açmaz.
+        if (btc_score >= 1.0) and trend_guclu and (price > curr['sma200']) and (rsi_val < 35):
             
             if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
                 pass
             else:
                 sinyal = "LONG"
-                setup = "Trend Pullback (BTC & ADX Onaylı)"
-                tp_rate = 0.030 
-                sl_rate = 0.060 
+                setup = "Scoring System Pullback"
+                tp_rate = 0.030
+                sl_rate = 0.060
         
-        # --- STRATEJİ 2: SHORT (MACRO DESTEKLİ) ---
-        # Şartlar:
-        # 1. BTC Bearish OLACAK (Piyasa düşüyor)
-        # 2. Coin Bearish OLACAK
-        # 3. Trend Güçlü OLACAK (ADX > 25)
-        # 4. RSI > 75 (Tepede, Şişkin)
-        
-        elif (genel_trend == "BEAR") and coin_bearish and rally_mode and trend_guclu and (rsi_val > 75):
+        # --- STRATEJİ 2: SHORT (SCORING BASED) ---
+        # BTC Skoru en az -1.0 (Ayı) olmalı.
+        # Nötr veya pozitif piyasada Short açmaz.
+        elif (btc_score <= -1.0) and trend_guclu and (price < curr['sma200']) and (rsi_val > 75):
             
             if short_var_mi(coin):
-                pass # Zaten short varsa açma
+                pass
             else:
                  if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
                     pass
                  else:
                     sinyal = "SHORT"
-                    setup = "Trend Reversal (BTC & ADX Onaylı)"
-                    tp_rate = 0.035 
-                    sl_rate = 0.060 
+                    setup = "Scoring System Reversal"
+                    tp_rate = 0.035
+                    sl_rate = 0.060
         
-        # SINYAL GÖNDERİMİ
+        # Sinyal varsa işlemleri yap
         if sinyal:
             tp_price = price * (1 + tp_rate) if sinyal == "LONG" else price * (1 - tp_rate)
             sl_price = price * (1 - sl_rate) if sinyal == "LONG" else price * (1 + sl_rate)
@@ -427,25 +400,26 @@ async def piyasayi_tarama(exchange):
             islem_kaydet(coin, sinyal, price, tp_price, sl_price)
             SON_SINYAL_ZAMANI[coin] = datetime.now()
             
-            print(f"🎯 {sinyal} SINYALI: {coin} (RSI: {rsi_val:.1f} | ADX: {adx_val:.1f})")
+            print(f"🎯 {sinyal}: {coin} (BTC Puan: {btc_score})")
             
             resim = await grafik_olustur_async(coin, df.tail(100), tp_price, sl_price, sinyal)
-            
             ikon = "🟢" if sinyal == "LONG" else "🔴"
+            
+            # Telegram Mesajı (Skoru da içerir)
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V3
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V4
 
 🪙 <b>Coin:</b> #{coin}
 📉 <b>Setup:</b> {setup}
 📊 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f}
+🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 🎯 <b>HEDEF (TP):</b> ${tp_price:{p_fmt}}
 🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}}
 
-🌍 <b>Piyasa Yönü:</b> {genel_trend}
 ⚠️ <i>Limit Emir Kullanın!</i>
-""" 
+"""
             try:
                 if resim:
                     await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
@@ -522,7 +496,7 @@ async def main():
     exchange = ccxt.kucoin(exchange_config)
     
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V3 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtreler: BTC Trend + ADX (25)\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V4 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama (-2/+2)\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
