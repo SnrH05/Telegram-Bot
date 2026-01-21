@@ -358,7 +358,7 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V4.5 SCANNING...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.2 HTF SCANNING...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -382,6 +382,19 @@ async def piyasayi_tarama(exchange):
     tasks = [fetch_candle(c) for c in COIN_LIST]
     results = await asyncio.gather(*tasks)
     
+    # ========== HTF (4H) TREND DATA ==========
+    async def fetch_htf_candle(s):
+        """4H mum verisi çek - HTF trend teyidi için"""
+        try:
+            ohlcv_4h = await exchange.fetch_ohlcv(f"{s}/USDT", '4h', limit=60)
+            return s, ohlcv_4h
+        except: 
+            return s, None
+    
+    htf_tasks = [fetch_htf_candle(c) for c in COIN_LIST]
+    htf_results = await asyncio.gather(*htf_tasks)
+    htf_data = {coin: data for coin, data in htf_results}
+    
     for coin, bars in results:
         if not bars: continue
         
@@ -404,6 +417,25 @@ async def piyasayi_tarama(exchange):
         
         trend_guclu = adx_val > 25
         
+        # ========== HTF (4H) TREND TEYİDİ ==========
+        htf_bullish = False
+        htf_bearish = False
+        
+        if coin in htf_data and htf_data[coin]:
+            df_4h = pd.DataFrame(htf_data[coin], columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+            df_4h['sma50'] = calculate_sma(df_4h['close'], 50)
+            df_4h['sma20'] = calculate_sma(df_4h['close'], 20)
+            
+            curr_4h = df_4h.iloc[-1]
+            htf_price = curr_4h['close']
+            htf_sma50 = curr_4h['sma50']
+            htf_sma20 = curr_4h['sma20']
+            
+            # HTF Bullish: Fiyat > SMA50 VE SMA20 > SMA50 (uptrend)
+            htf_bullish = (htf_price > htf_sma50) and (htf_sma20 > htf_sma50)
+            # HTF Bearish: Fiyat < SMA50 VE SMA20 < SMA50 (downtrend)
+            htf_bearish = (htf_price < htf_sma50) and (htf_sma20 < htf_sma50)
+        
         sinyal = None
         setup = ""
         # Multi-TP Rates (TP1, TP2, TP3)
@@ -416,23 +448,20 @@ async def piyasayi_tarama(exchange):
         if pozisyon_acik_mi(coin):
             continue  # Wait until current position closes
         
-        # --- STRATEJİ: LONG ---
-        if (btc_score >= 1.0) and trend_guclu and (price > curr['sma200']) and (rsi_val < 35):
+        # --- STRATEJİ: LONG (HTF TEYİDLİ) ---
+        # 1H + 4H trend uyumu gerekli
+        if (btc_score >= 1.0) and trend_guclu and htf_bullish and (price > curr['sma200']) and (rsi_val < 35):
             sinyal = "LONG"
-            setup = "Vol+Score Pullback"
-            tp1_rate = 0.030  # %3.0 (Scalp)
-            tp2_rate = 0.050  # %5.0 (Swing)
-            tp3_rate = 0.080  # %8.0 (Runner)
-            sl_rate = 0.050   # %5.0 SL
+            setup = "HTF+LTF Pullback"
+            tp1_rate = 0.030
+            tp2_rate = 0.050
+            tp3_rate = 0.080
+            sl_rate = 0.050
         
-        # --- STRATEJİ: SHORT ---
-        elif (btc_score <= -1.0) and trend_guclu and (price < curr['sma200']) and (rsi_val > 75):
+        # --- STRATEJİ: SHORT (HTF TEYİDLİ) ---
+        elif (btc_score <= -1.0) and trend_guclu and htf_bearish and (price < curr['sma200']) and (rsi_val > 75):
             sinyal = "SHORT"
-            setup = "Vol+Score Reversal"
-            tp1_rate = 0.035  # %3.5 (Scalp)
-            tp2_rate = 0.060  # %6.0 (Swing)
-            tp3_rate = 0.090  # %9.0 (Runner)
-            sl_rate = 0.055   # %5.5 SL
+            setup = "HTF+LTF Reversal"
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
@@ -472,12 +501,13 @@ async def piyasayi_tarama(exchange):
             ikon = "🟢" if sinyal == "LONG" else "🔴"
             
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.1-ATR
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.2-HTF
 
 🪙 <b>Coin:</b> #{coin}
 📉 <b>Setup:</b> {setup}
 📊 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
 🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
+⏰ <b>4H Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
@@ -486,7 +516,7 @@ async def piyasayi_tarama(exchange):
 🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [4x ATR]
 🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
 
-📌 <i>ATR-Based Dynamic Stops - Volatility Adaptive!</i>
+📌 <i>HTF (4H) + LTF (1H) Trend Uyumu - Yüksek Kalite!</i>
 """
             try:
                 if resim:
