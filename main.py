@@ -1,4 +1,4 @@
-import feedparser  # <-- İstenilen import eklendi
+import feedparser  
 import asyncio
 import os
 import sys
@@ -72,6 +72,15 @@ def calculate_rsi(series, period=14):
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / loss
     return 100 - (100 / (1 + rs))
+
+def calculate_atr(df, period=14):
+    """Calculate Average True Range for dynamic stops"""
+    df = df.copy()
+    df['h-l'] = df['high'] - df['low']
+    df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+    df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+    return df['tr'].rolling(period).mean()
 
 # ADX İndikatörü
 def calculate_adx(df, period=14):
@@ -176,9 +185,18 @@ def db_ilk_kurulum():
         conn.execute("CREATE TABLE IF NOT EXISTS haberler (link TEXT PRIMARY KEY)")
 
 def short_var_mi(coin):
+    """Check if there's an open SHORT position for a coin"""
     with sqlite3.connect("titanium_live.db") as conn:
         c = conn.cursor()
         c.execute("SELECT count(*) FROM islemler WHERE coin=? AND yon='SHORT' AND durum='ACIK'", (coin,))
+        count = c.fetchone()[0]
+        return count > 0
+
+def pozisyon_acik_mi(coin):
+    """Check if there's ANY open position (LONG or SHORT) for a coin - Anti-Spam"""
+    with sqlite3.connect("titanium_live.db") as conn:
+        c = conn.cursor()
+        c.execute("SELECT count(*) FROM islemler WHERE coin=? AND durum='ACIK'", (coin,))
         count = c.fetchone()[0]
         return count > 0
 
@@ -376,11 +394,13 @@ async def piyasayi_tarama(exchange):
         df['sma200'] = calculate_sma(df['close'], 200)
         df['rsi'] = calculate_rsi(df['close'])
         df['adx'] = calculate_adx(df)
+        df['atr'] = calculate_atr(df)  # ATR for dynamic stops
         
         curr = df.iloc[-1]
         price = curr['close']
         rsi_val = curr['rsi']
         adx_val = curr['adx']
+        atr_val = curr['atr']  # Current ATR value
         
         trend_guclu = adx_val > 25
         
@@ -392,47 +412,53 @@ async def piyasayi_tarama(exchange):
         tp3_rate = 0.0
         sl_rate = 0.0
         
+        # 🚫 ANTI-SPAM: Skip if there's already an open position for this coin
+        if pozisyon_acik_mi(coin):
+            continue  # Wait until current position closes
+        
         # --- STRATEJİ: LONG ---
         if (btc_score >= 1.0) and trend_guclu and (price > curr['sma200']) and (rsi_val < 35):
-            
-            if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
-                pass
-            else:
-                sinyal = "LONG"
-                setup = "Vol+Score Pullback"
-                tp1_rate = 0.030  # %3.0 (Scalp)
-                tp2_rate = 0.050  # %5.0 (Swing)
-                tp3_rate = 0.080  # %8.0 (Runner)
-                sl_rate = 0.050   # %5.0 SL
+            sinyal = "LONG"
+            setup = "Vol+Score Pullback"
+            tp1_rate = 0.030  # %3.0 (Scalp)
+            tp2_rate = 0.050  # %5.0 (Swing)
+            tp3_rate = 0.080  # %8.0 (Runner)
+            sl_rate = 0.050   # %5.0 SL
         
         # --- STRATEJİ: SHORT ---
         elif (btc_score <= -1.0) and trend_guclu and (price < curr['sma200']) and (rsi_val > 75):
-            
-            if short_var_mi(coin):
-                pass
-            else:
-                 if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
-                    pass
-                 else:
-                    sinyal = "SHORT"
-                    setup = "Vol+Score Reversal"
-                    tp1_rate = 0.035  # %3.5 (Scalp)
-                    tp2_rate = 0.060  # %6.0 (Swing)
-                    tp3_rate = 0.090  # %9.0 (Runner)
-                    sl_rate = 0.055   # %5.5 SL
+            sinyal = "SHORT"
+            setup = "Vol+Score Reversal"
+            tp1_rate = 0.035  # %3.5 (Scalp)
+            tp2_rate = 0.060  # %6.0 (Swing)
+            tp3_rate = 0.090  # %9.0 (Runner)
+            sl_rate = 0.055   # %5.5 SL
         
         if sinyal:
-            # Calculate Multi-Level TP Prices
+            # ========== ATR-BASED TP/SL CALCULATION ==========
+            # ATR Multipliers: SL=2x, TP1=1.5x, TP2=2.5x, TP3=4x
+            atr_sl = atr_val * 2.0    # Stop Loss: 2x ATR
+            atr_tp1 = atr_val * 1.5   # TP1: 1.5x ATR  
+            atr_tp2 = atr_val * 2.5   # TP2: 2.5x ATR
+            atr_tp3 = atr_val * 4.0   # TP3: 4x ATR (runner)
+            
             if sinyal == "LONG":
-                tp1_price = price * (1 + tp1_rate)
-                tp2_price = price * (1 + tp2_rate)
-                tp3_price = price * (1 + tp3_rate)
-                sl_price = price * (1 - sl_rate)
+                tp1_price = price + atr_tp1
+                tp2_price = price + atr_tp2
+                tp3_price = price + atr_tp3
+                sl_price = price - atr_sl
             else:  # SHORT
-                tp1_price = price * (1 - tp1_rate)
-                tp2_price = price * (1 - tp2_rate)
-                tp3_price = price * (1 - tp3_rate)
-                sl_price = price * (1 + sl_rate)
+                tp1_price = price - atr_tp1
+                tp2_price = price - atr_tp2
+                tp3_price = price - atr_tp3
+                sl_price = price + atr_sl
+            
+            # Calculate percentages for display
+            tp1_pct = abs(tp1_price - price) / price * 100
+            tp2_pct = abs(tp2_price - price) / price * 100
+            tp3_pct = abs(tp3_price - price) / price * 100
+            sl_pct = abs(sl_price - price) / price * 100
+            atr_pct = (atr_val / price) * 100  # ATR as % of price
             
             p_fmt = ".8f" if price < 0.01 else ".4f"
             
@@ -440,27 +466,27 @@ async def piyasayi_tarama(exchange):
             islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp3_price, sl_price)
             SON_SINYAL_ZAMANI[coin] = datetime.now()
             
-            print(f"🎯 {sinyal}: {coin} (BTC Puan: {btc_score})")
+            print(f"🎯 {sinyal}: {coin} (ATR: {atr_pct:.2f}%)")
             
             resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, sinyal)
             ikon = "🟢" if sinyal == "LONG" else "🔴"
             
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.0
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.1-ATR
 
 🪙 <b>Coin:</b> #{coin}
 📉 <b>Setup:</b> {setup}
-📊 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f}
+📊 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
 🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_rate*100:.1f}%)
-🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_rate*100:.1f}%)
-🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_rate*100:.1f}%)
-🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_rate*100:.1f}%)
+🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) [1.5x ATR]
+🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) [2.5x ATR]
+🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [4x ATR]
+🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
 
-📌 <i>Pozisyonu 3'e Bölün! TP1'de %33, TP2'de %33, TP3'de Kalan</i>
+📌 <i>ATR-Based Dynamic Stops - Volatility Adaptive!</i>
 """
             try:
                 if resim:
