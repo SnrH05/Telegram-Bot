@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V4: SCORING SYSTEM) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V4.5: VOLUME CONFIRMATION) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -73,7 +73,7 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# ADX İndikatörü (Trend Gücü Ölçer)
+# ADX İndikatörü
 def calculate_adx(df, period=14):
     df = df.copy()
     df['h-l'] = df['high'] - df['low']
@@ -146,12 +146,33 @@ async def grafik_olustur_async(coin, df, tp, sl, yon):
 # ==========================================
 def db_ilk_kurulum():
     with sqlite3.connect("titanium_live.db") as conn:
+        # Islemler Tablosu (Multi-TP Support)
         conn.execute("""CREATE TABLE IF NOT EXISTS islemler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            coin TEXT, yon TEXT, giris_fiyat REAL, tp REAL, sl REAL,
+            coin TEXT, yon TEXT, giris_fiyat REAL, 
+            tp1 REAL, tp2 REAL, tp3 REAL, sl REAL,
+            tp1_hit INTEGER DEFAULT 0, tp2_hit INTEGER DEFAULT 0,
             durum TEXT DEFAULT 'ACIK', pnl_yuzde REAL DEFAULT 0,
             acilis_zamani DATETIME, kapanis_zamani DATETIME
         )""")
+        
+        # Migrate old table if tp2/tp3 columns missing
+        try:
+            conn.execute("ALTER TABLE islemler ADD COLUMN tp2 REAL")
+            conn.execute("ALTER TABLE islemler ADD COLUMN tp3 REAL")
+            conn.execute("ALTER TABLE islemler ADD COLUMN tp1_hit INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE islemler ADD COLUMN tp2_hit INTEGER DEFAULT 0")
+            # Rename old tp column to tp1
+            conn.execute("UPDATE islemler SET tp1 = tp, tp2 = tp, tp3 = tp WHERE tp1 IS NULL") # Assuming 'tp' was the old column name
+            conn.execute("ALTER TABLE islemler DROP COLUMN tp") # Drop the old single TP column
+        except sqlite3.OperationalError as e:
+            # This error occurs if the column already exists or if 'tp' column doesn't exist to drop
+            if "duplicate column name" not in str(e) and "no such column" not in str(e):
+                print(f"DB Migration Error: {e}")
+        except Exception as e:
+            print(f"Unexpected DB Migration Error: {e}")
+        
+        # Haberler Tablosu (Haber Hafızası)
         conn.execute("CREATE TABLE IF NOT EXISTS haberler (link TEXT PRIMARY KEY)")
 
 def short_var_mi(coin):
@@ -161,10 +182,11 @@ def short_var_mi(coin):
         count = c.fetchone()[0]
         return count > 0
 
-def islem_kaydet(coin, yon, giris, tp, sl):
+def islem_kaydet(coin, yon, giris, tp1, tp2, tp3, sl):
+    """Save trade with multiple take profit levels"""
     with sqlite3.connect("titanium_live.db") as conn:
-        conn.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp, sl, acilis_zamani) VALUES (?, ?, ?, ?, ?, ?)", 
-                  (coin, yon, giris, tp, sl, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp1, tp2, tp3, sl, acilis_zamani) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
+                  (coin, yon, giris, tp1, tp2, tp3, sl, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
 async def gunluk_rapor_gonder():
     try:
@@ -256,19 +278,21 @@ async def haberleri_kontrol_et():
         except: pass
 
 # ==========================================
-# 🚀 BÖLÜM 5: STRATEJİ MOTORU (PUANLAMA SİSTEMİ EKLENDİ)
+# 🚀 BÖLÜM 5: STRATEJİ MOTORU (VOLUME + SCORING)
 # ==========================================
 
 async def btc_piyasa_puani_hesapla(exchange):
     """
-    BTC için -2.0 ile +2.0 arasında bir piyasa puanı döndürür.
-    Hesaplama Mantığı:
-    1. SMA 200 (Ana Trend): +1 / -1
-    2. SMA 50 (Kısa Trend): +0.5 / -0.5
-    3. RSI 50 (Momentum):   +0.5 / -0.5
+    BTC için Piyasa Puanı (-2.5 ile +2.5 arası)
+    
+    Kriterler:
+    1. SMA 200 (Ana Trend): +/- 1.0
+    2. SMA 50 (Kısa Trend): +/- 0.5
+    3. RSI 50 (Momentum):   +/- 0.5
+    4. HACİM (Volume):      +/- 0.5 (Teyitçi)
     """
     try:
-        # BTC verisini çek (Son 210 mum yeterli)
+        # BTC verisini çek
         ohlcv = await exchange.fetch_ohlcv("BTC/USDT", '1h', limit=210)
         if not ohlcv: return 0
         
@@ -276,47 +300,52 @@ async def btc_piyasa_puani_hesapla(exchange):
         
         # Son değerleri al
         price = df['close'].iloc[-1]
+        open_price = df['open'].iloc[-1]
         sma50 = df['close'].rolling(50).mean().iloc[-1]
         sma200 = df['close'].rolling(200).mean().iloc[-1]
         rsi = calculate_rsi(df['close']).iloc[-1]
         
+        # --- HACİM ANALİZİ ---
+        vol_sma = df['volume'].rolling(20).mean().iloc[-1] # Son 20 mum ortalaması
+        curr_vol = df['volume'].iloc[-1] # Şu anki hacim
+        vol_ratio = curr_vol / vol_sma
+        
         score = 0.0
         
-        # --- PUANLAMA MOTORU ---
+        # 1. ANA TREND
+        if price > sma200: score += 1.0
+        else: score -= 1.0
+            
+        # 2. KISA TREND
+        if price > sma50: score += 0.5
+        else: score -= 0.5
+            
+        # 3. MOMENTUM
+        if rsi > 50: score += 0.5
+        else: score -= 0.5
         
-        # 1. KRİTER: ANA TREND (SMA 200) - Ağırlık: 1 Puan
-        # Boğa piyasasının en temel göstergesi
-        if price > sma200:
-            score += 1.0
-        else:
-            score -= 1.0
-            
-        # 2. KRİTER: KISA TREND (SMA 50) - Ağırlık: 0.5 Puan
-        # Kısa vadeli düzeltmeleri anlamak için
-        if price > sma50:
-            score += 0.5
-        else:
-            score -= 0.5
-            
-        # 3. KRİTER: MOMENTUM (RSI 50) - Ağırlık: 0.5 Puan
-        # Alıcılar mı satıcılar mı baskın?
-        if rsi > 50:
-            score += 0.5
-        else:
-            score -= 0.5
-            
+        # 4. HACİM TEYİDİ (YENİ EKLENEN KISIM)
+        # Hacim ortalamanın %25 üzerindeyse güçlü kabul et
+        if vol_ratio > 1.25:
+            # Yeşil Mum + Yüksek Hacim = Güçlü Alış (+0.5)
+            if price > open_price: 
+                score += 0.5
+            # Kırmızı Mum + Yüksek Hacim = Güçlü Satış (-0.5)
+            else: 
+                score -= 0.5
+                
         return score
     except Exception as e:
         print(f"⚠️ BTC Puan Hatası: {e}")
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V4 SCANNING...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V4.5 SCANNING...")
     
-    # 1. ÖNCE BTC PUANINI HESAPLA (MASTER FILTRE)
+    # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
     
-    # Skora göre görsel ikon belirle
+    # İkon Belirleme
     if btc_score >= 1.5: btc_ikon = "🟢🟢 (Güçlü Bull)"
     elif btc_score >= 0.5: btc_ikon = "🟢 (Bull)"
     elif btc_score <= -1.5: btc_ikon = "🔴🔴 (Güçlü Bear)"
@@ -342,7 +371,7 @@ async def piyasayi_tarama(exchange):
         df['date'] = pd.to_datetime(df['date'], unit='ms')
         df.set_index('date', inplace=True)
         
-        # İndikatörleri Hesapla
+        # İndikatörler
         df['sma50'] = calculate_sma(df['close'], 50)
         df['sma200'] = calculate_sma(df['close'], 200)
         df['rsi'] = calculate_rsi(df['close'])
@@ -353,30 +382,30 @@ async def piyasayi_tarama(exchange):
         rsi_val = curr['rsi']
         adx_val = curr['adx']
         
-        # Trend Gücü Filtresi (Yatay piyasada işlem açma)
         trend_guclu = adx_val > 25
         
         sinyal = None
         setup = ""
-        tp_rate = 0.0
+        # Multi-TP Rates (TP1, TP2, TP3)
+        tp1_rate = 0.0
+        tp2_rate = 0.0
+        tp3_rate = 0.0
         sl_rate = 0.0
         
-        # --- STRATEJİ 1: LONG (SCORING BASED) ---
-        # BTC Skoru en az +1.0 (Boğa) olmalı.
-        # Nötr (0.0) veya negatif piyasada Long açmaz.
+        # --- STRATEJİ: LONG ---
         if (btc_score >= 1.0) and trend_guclu and (price > curr['sma200']) and (rsi_val < 35):
             
             if coin in SON_SINYAL_ZAMANI and (datetime.now() - SON_SINYAL_ZAMANI[coin]) < timedelta(hours=2):
                 pass
             else:
                 sinyal = "LONG"
-                setup = "Scoring System Pullback"
-                tp_rate = 0.030
-                sl_rate = 0.060
+                setup = "Vol+Score Pullback"
+                tp1_rate = 0.030  # %3.0 (Scalp)
+                tp2_rate = 0.050  # %5.0 (Swing)
+                tp3_rate = 0.080  # %8.0 (Runner)
+                sl_rate = 0.050   # %5.0 SL
         
-        # --- STRATEJİ 2: SHORT (SCORING BASED) ---
-        # BTC Skoru en az -1.0 (Ayı) olmalı.
-        # Nötr veya pozitif piyasada Short açmaz.
+        # --- STRATEJİ: SHORT ---
         elif (btc_score <= -1.0) and trend_guclu and (price < curr['sma200']) and (rsi_val > 75):
             
             if short_var_mi(coin):
@@ -386,28 +415,38 @@ async def piyasayi_tarama(exchange):
                     pass
                  else:
                     sinyal = "SHORT"
-                    setup = "Scoring System Reversal"
-                    tp_rate = 0.035
-                    sl_rate = 0.060
+                    setup = "Vol+Score Reversal"
+                    tp1_rate = 0.035  # %3.5 (Scalp)
+                    tp2_rate = 0.060  # %6.0 (Swing)
+                    tp3_rate = 0.090  # %9.0 (Runner)
+                    sl_rate = 0.055   # %5.5 SL
         
-        # Sinyal varsa işlemleri yap
         if sinyal:
-            tp_price = price * (1 + tp_rate) if sinyal == "LONG" else price * (1 - tp_rate)
-            sl_price = price * (1 - sl_rate) if sinyal == "LONG" else price * (1 + sl_rate)
+            # Calculate Multi-Level TP Prices
+            if sinyal == "LONG":
+                tp1_price = price * (1 + tp1_rate)
+                tp2_price = price * (1 + tp2_rate)
+                tp3_price = price * (1 + tp3_rate)
+                sl_price = price * (1 - sl_rate)
+            else:  # SHORT
+                tp1_price = price * (1 - tp1_rate)
+                tp2_price = price * (1 - tp2_rate)
+                tp3_price = price * (1 - tp3_rate)
+                sl_price = price * (1 + sl_rate)
             
             p_fmt = ".8f" if price < 0.01 else ".4f"
             
-            islem_kaydet(coin, sinyal, price, tp_price, sl_price)
+            # Save with all TP levels
+            islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp3_price, sl_price)
             SON_SINYAL_ZAMANI[coin] = datetime.now()
             
             print(f"🎯 {sinyal}: {coin} (BTC Puan: {btc_score})")
             
-            resim = await grafik_olustur_async(coin, df.tail(100), tp_price, sl_price, sinyal)
+            resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, sinyal)
             ikon = "🟢" if sinyal == "LONG" else "🔴"
             
-            # Telegram Mesajı (Skoru da içerir)
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V4
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.0
 
 🪙 <b>Coin:</b> #{coin}
 📉 <b>Setup:</b> {setup}
@@ -415,10 +454,13 @@ async def piyasayi_tarama(exchange):
 🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
-🎯 <b>HEDEF (TP):</b> ${tp_price:{p_fmt}}
-🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}}
 
-⚠️ <i>Limit Emir Kullanın!</i>
+🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_rate*100:.1f}%)
+🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_rate*100:.1f}%)
+🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_rate*100:.1f}%)
+🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_rate*100:.1f}%)
+
+📌 <i>Pozisyonu 3'e Bölün! TP1'de %33, TP2'de %33, TP3'de Kalan</i>
 """
             try:
                 if resim:
@@ -429,61 +471,147 @@ async def piyasayi_tarama(exchange):
                 print(f"Telegram Hatasi: {e}")
 
 # ==========================================
-# 🛡️ BÖLÜM 6: POZİSYON TAKİBİ
+# 🛡️ BÖLÜM 6: POZİSYON TAKİBİ (MULTI-TP)
 # ==========================================
 async def pozisyonlari_yokla(exchange):
+    """Track open positions with multi-level TP support"""
     with sqlite3.connect("titanium_live.db") as conn:
         c = conn.cursor()
-        c.execute("SELECT id, coin, yon, giris_fiyat, tp, sl FROM islemler WHERE durum='ACIK'")
+        # Updated query for multi-TP columns
+        c.execute("""SELECT id, coin, yon, giris_fiyat, tp1, tp2, tp3, sl, tp1_hit, tp2_hit 
+                     FROM islemler WHERE durum='ACIK'""")
         acik_islemler = c.fetchall()
         
     if not acik_islemler: return
 
     for islem in acik_islemler:
-        id, coin, yon, giris, tp, sl = islem
+        id, coin, yon, giris, tp1, tp2, tp3, sl, tp1_hit, tp2_hit = islem
         try:
             ticker = await exchange.fetch_ticker(f"{coin}/USDT")
             fiyat = ticker['last']
-            sonuc = None
-            pnl_yuzde = 0.0
+            p_fmt = ".8f" if fiyat < 0.01 else ".4f"
             
-            if yon == "LONG":
-                if fiyat >= tp:
-                    sonuc = "KAZANDI"
-                    pnl_yuzde = 3.0
-                elif fiyat <= sl:
-                    sonuc = "KAYBETTI"
-                    pnl_yuzde = -6.0
-            elif yon == "SHORT":
-                if fiyat <= tp:
-                    sonuc = "KAZANDI"
-                    pnl_yuzde = 3.5
-                elif fiyat >= sl:
-                    sonuc = "KAYBETTI"
-                    pnl_yuzde = -6.0
+            # --- TP1 CHECK ---
+            if not tp1_hit:
+                tp1_reached = (fiyat >= tp1) if yon == "LONG" else (fiyat <= tp1)
+                if tp1_reached:
+                    # Move SL to TP1 (Trailing Stop / Breakeven+)
+                    with sqlite3.connect("titanium_live.db") as conn:
+                        conn.execute("UPDATE islemler SET tp1_hit=1, sl=? WHERE id=?", (tp1, id))
+                    
+                    pnl1 = ((tp1 - giris) / giris * 100) if yon == "LONG" else ((giris - tp1) / giris * 100)
+                    mesaj = f"""
+🎯 <b>TP1 ULAŞILDI!</b> ✅
+
+🪙 <b>#{coin}</b> ({yon})
+💰 <b>Giriş:</b> ${giris:{p_fmt}}
+🎯 <b>TP1:</b> ${tp1:{p_fmt}}
+📈 <b>Kâr:</b> +{pnl1:.2f}%
+
+� <b>YENİ SL:</b> ${tp1:{p_fmt}} (Kâr Kilitlendi!)
+�📌 <i>%33 Kapatıldı - Kalan %67 Risksiz!</i>
+"""
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    continue  # Check other TPs next cycle
             
-            if sonuc:
-                with sqlite3.connect("titanium_live.db") as conn:
-                    conn.execute("UPDATE islemler SET durum=?, pnl_yuzde=?, kapanis_zamani=? WHERE id=?", 
-                              (sonuc, pnl_yuzde, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
+            # --- TP2 CHECK ---
+            if tp1_hit and not tp2_hit:
+                tp2_reached = (fiyat >= tp2) if yon == "LONG" else (fiyat <= tp2)
+                if tp2_reached:
+                    # Move SL to TP2 (Trailing Stop for Runner)
+                    with sqlite3.connect("titanium_live.db") as conn:
+                        conn.execute("UPDATE islemler SET tp2_hit=1, sl=? WHERE id=?", (tp2, id))
+                    
+                    pnl2 = ((tp2 - giris) / giris * 100) if yon == "LONG" else ((giris - tp2) / giris * 100)
+                    mesaj = f"""
+🎯🎯 <b>TP2 ULAŞILDI!</b> ✅✅
+
+🪙 <b>#{coin}</b> ({yon})
+💰 <b>Giriş:</b> ${giris:{p_fmt}}
+🎯 <b>TP2:</b> ${tp2:{p_fmt}}
+📈 <b>Kâr:</b> +{pnl2:.2f}%
+
+🔒 <b>YENİ SL:</b> ${tp2:{p_fmt}} (TP2 Kilitlendi!)
+📌 <i>%66 Kapatıldı - Kalan %34 TP3'e Bırakıldı</i>
+"""
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    continue
+            
+            # --- TP3 CHECK (FULL EXIT) ---
+            if tp1_hit and tp2_hit:
+                tp3_reached = (fiyat >= tp3) if yon == "LONG" else (fiyat <= tp3)
+                if tp3_reached:
+                    pnl3 = ((tp3 - giris) / giris * 100) if yon == "LONG" else ((giris - tp3) / giris * 100)
+                    # Calculate weighted average PnL (33% + 33% + 34%)
+                    pnl1 = ((tp1 - giris) / giris * 100) if yon == "LONG" else ((giris - tp1) / giris * 100)
+                    pnl2 = ((tp2 - giris) / giris * 100) if yon == "LONG" else ((giris - tp2) / giris * 100)
+                    total_pnl = (pnl1 * 0.33) + (pnl2 * 0.33) + (pnl3 * 0.34)
+                    
+                    with sqlite3.connect("titanium_live.db") as conn:
+                        conn.execute("""UPDATE islemler SET durum='KAZANDI', pnl_yuzde=?, 
+                                      kapanis_zamani=? WHERE id=?""", 
+                                  (total_pnl, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
+                    
+                    mesaj = f"""
+🏆🏆🏆 <b>TÜM HEDEFLER TAMAMLANDI!</b> 🎉
+
+🪙 <b>#{coin}</b> ({yon})
+💰 <b>Giriş:</b> ${giris:{p_fmt}}
+🎯 <b>TP1:</b> ${tp1:{p_fmt}} ✅
+🎯 <b>TP2:</b> ${tp2:{p_fmt}} ✅
+🎯 <b>TP3:</b> ${tp3:{p_fmt}} ✅
+📈 <b>Toplam Kâr:</b> +{total_pnl:.2f}%
+
+🤖 <i>Titanium V5.0 - Triple TP Success!</i>
+"""
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    continue
+            
+            # --- STOP LOSS CHECK ---
+            sl_hit = (fiyat <= sl) if yon == "LONG" else (fiyat >= sl)
+            if sl_hit:
+                # Calculate actual PnL based on which TPs were hit
+                partial_profit = 0.0
+                if tp1_hit:
+                    pnl1 = ((tp1 - giris) / giris * 100) if yon == "LONG" else ((giris - tp1) / giris * 100)
+                    partial_profit += pnl1 * 0.33
+                if tp2_hit:
+                    pnl2 = ((tp2 - giris) / giris * 100) if yon == "LONG" else ((giris - tp2) / giris * 100)
+                    partial_profit += pnl2 * 0.33
                 
-                ikon = "✅" if sonuc == "KAZANDI" else "❌"
-                p_fmt = ".8f" if fiyat < 0.01 else ".4f"
+                # Remaining position hit SL
+                remaining_pct = 1.0 - (0.33 if tp1_hit else 0) - (0.33 if tp2_hit else 0)
+                sl_pnl = ((sl - giris) / giris * 100) if yon == "LONG" else ((giris - sl) / giris * 100)
+                total_pnl = partial_profit + (sl_pnl * remaining_pct)
+                
+                durum = "PARTIAL" if (tp1_hit or tp2_hit) else "KAYBETTI"
+                
+                with sqlite3.connect("titanium_live.db") as conn:
+                    conn.execute("""UPDATE islemler SET durum=?, pnl_yuzde=?, 
+                                  kapanis_zamani=? WHERE id=?""", 
+                              (durum, total_pnl, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), id))
+                
+                ikon = "⚠️" if durum == "PARTIAL" else "❌"
+                tp_status = f"TP1: {'✅' if tp1_hit else '❌'} | TP2: {'✅' if tp2_hit else '❌'}"
                 
                 mesaj = f"""
 🏁 <b>POZİSYON KAPANDI</b> {ikon}
 
 🪙 <b>#{coin}</b> ({yon})
-🏷️ <b>Sonuç:</b> {sonuc}
+🏷️ <b>Sonuç:</b> {durum}
+{tp_status}
 
 💰 <b>Giriş:</b> ${giris:{p_fmt}}
-🚪 <b>Çıkış:</b> ${fiyat:{p_fmt}}
-📉 <b>Kâr/Zarar:</b> %{pnl_yuzde}
+🚪 <b>SL Çıkış:</b> ${fiyat:{p_fmt}}
+📉 <b>Net Kâr/Zarar:</b> {total_pnl:+.2f}%
 
 🤖 <i>Titanium Bot</i>
 """
                 await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-        except: continue
+                
+        except Exception as e:
+            print(f"Pozisyon Takip Hatası ({coin}): {e}")
+            continue
 
 # ==========================================
 # 🏁 MAIN LOOP
@@ -496,7 +624,7 @@ async def main():
     exchange = ccxt.kucoin(exchange_config)
     
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V4 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama (-2/+2)\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V4.5 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
