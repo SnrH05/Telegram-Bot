@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V4.5: VOLUME CONFIRMATION) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.1: ATR) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
