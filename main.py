@@ -438,30 +438,109 @@ async def piyasayi_tarama(exchange):
         
         sinyal = None
         setup = ""
-        # Multi-TP Rates (TP1, TP2, TP3)
-        tp1_rate = 0.0
-        tp2_rate = 0.0
-        tp3_rate = 0.0
-        sl_rate = 0.0
         
         # 🚫 ANTI-SPAM: Skip if there's already an open position for this coin
         if pozisyon_acik_mi(coin):
             continue  # Wait until current position closes
         
-        # --- STRATEJİ: LONG (HTF TEYİDLİ) ---
-        # 1H + 4H trend uyumu gerekli
-        if (btc_score >= 1.0) and trend_guclu and htf_bullish and (price > curr['sma200']) and (rsi_val < 35):
-            sinyal = "LONG"
-            setup = "HTF+LTF Pullback"
-            tp1_rate = 0.030
-            tp2_rate = 0.050
-            tp3_rate = 0.080
-            sl_rate = 0.050
+        # ========== 📊 100 PUANLIK SKORLAMA SİSTEMİ ==========
+        # Ağırlıklar:
+        # - BTC Skoru: 30 puan (piyasa yönü - en önemli)
+        # - 4H HTF Trend: 25 puan (yüksek zaman dilimi teyidi)
+        # - SMA200 Trend: 20 puan (ana fiyat trendi)
+        # - ADX Güç: 15 puan (trend gücü)
+        # - RSI Seviye: 10 puan (momentum)
+        # TOPLAM: 100 puan, %70+ = Sinyal
         
-        # --- STRATEJİ: SHORT (HTF TEYİDLİ) ---
-        elif (btc_score <= -1.0) and trend_guclu and htf_bearish and (price < curr['sma200']) and (rsi_val > 75):
+        long_score = 0
+        short_score = 0
+        long_breakdown = []
+        short_breakdown = []
+        
+        # 1️⃣ BTC SKORU (30 puan)
+        if btc_score >= 1.5:
+            long_score += 30
+            long_breakdown.append("BTC:30")
+        elif btc_score >= 1.0:
+            long_score += 25
+            long_breakdown.append("BTC:25")
+        elif btc_score >= 0.5:
+            long_score += 15
+            long_breakdown.append("BTC:15")
+            
+        if btc_score <= -1.5:
+            short_score += 30
+            short_breakdown.append("BTC:30")
+        elif btc_score <= -1.0:
+            short_score += 25
+            short_breakdown.append("BTC:25")
+        elif btc_score <= -0.5:
+            short_score += 15
+            short_breakdown.append("BTC:15")
+        
+        # 2️⃣ 4H HTF TREND (25 puan)
+        if htf_bullish:
+            long_score += 25
+            long_breakdown.append("HTF:25")
+        if htf_bearish:
+            short_score += 25
+            short_breakdown.append("HTF:25")
+        
+        # 3️⃣ SMA200 TREND (20 puan)
+        if price > curr['sma200']:
+            long_score += 20
+            long_breakdown.append("SMA200:20")
+        if price < curr['sma200']:
+            short_score += 20
+            short_breakdown.append("SMA200:20")
+        
+        # 4️⃣ ADX GÜÇ (15 puan)
+        if adx_val > 30:
+            long_score += 15
+            short_score += 15
+            long_breakdown.append("ADX:15")
+            short_breakdown.append("ADX:15")
+        elif adx_val > 25:
+            long_score += 10
+            short_score += 10
+            long_breakdown.append("ADX:10")
+            short_breakdown.append("ADX:10")
+        elif adx_val > 20:
+            long_score += 5
+            short_score += 5
+            long_breakdown.append("ADX:5")
+            short_breakdown.append("ADX:5")
+        
+        # 5️⃣ RSI SEVİYE (10 puan)
+        if rsi_val < 30:
+            long_score += 10
+            long_breakdown.append("RSI:10")
+        elif rsi_val < 35:
+            long_score += 7
+            long_breakdown.append("RSI:7")
+        elif rsi_val < 40:
+            long_score += 4
+            long_breakdown.append("RSI:4")
+            
+        if rsi_val > 70:
+            short_score += 10
+            short_breakdown.append("RSI:10")
+        elif rsi_val > 65:
+            short_score += 7
+            short_breakdown.append("RSI:7")
+        elif rsi_val > 60:
+            short_score += 4
+            short_breakdown.append("RSI:4")
+        
+        # ========== SİNYAL KARARI (%70 EŞİĞİ) ==========
+        ESIK = 70  # Minimum skor eşiği
+        
+        if long_score >= ESIK and long_score > short_score:
+            sinyal = "LONG"
+            setup = f"Score: {long_score}/100 ({'+'.join(long_breakdown)})"
+        elif short_score >= ESIK and short_score > long_score:
             sinyal = "SHORT"
-            setup = "HTF+LTF Reversal"
+            setup = f"Score: {short_score}/100 ({'+'.join(short_breakdown)})"
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
@@ -495,27 +574,32 @@ async def piyasayi_tarama(exchange):
             islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp3_price, sl_price)
             SON_SINYAL_ZAMANI[coin] = datetime.now()
             
-            print(f"🎯 {sinyal}: {coin} (ATR: {atr_pct:.2f}%)")
+            print(f"🎯 {sinyal}: {coin} (Score: {long_score if sinyal == 'LONG' else short_score}/100, ATR: {atr_pct:.2f}%)")
             
             resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, sinyal)
             ikon = "🟢" if sinyal == "LONG" else "🔴"
             
+            # Skor bilgisi
+            skor_deger = long_score if sinyal == "LONG" else short_score
+            skor_breakdown = '+'.join(long_breakdown) if sinyal == "LONG" else '+'.join(short_breakdown)
+            
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.2-HTF
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.3-SCORE
 
 🪙 <b>Coin:</b> #{coin}
-📉 <b>Setup:</b> {setup}
+� <b>Skor:</b> {skor_deger}/100 ({skor_breakdown})
+� <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
 🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
 ⏰ <b>4H Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) 
-🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) 
-🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) 
-🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) 
+🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) [1.5x ATR]
+🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) [2.5x ATR]
+🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [4x ATR]
+🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
 
-📌 <i>HTF (4H) + LTF (1H) Trend Uyumu - Yüksek Kalite!</i>
+📌 <i>%{skor_deger} Güven Skoru ile Sinyal</i>
 """
             try:
                 if resim:
