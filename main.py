@@ -573,11 +573,11 @@ async def piyasayi_tarama(exchange):
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
-            # ATR Multipliers: SL=2x, TP1=2x, TP2=3.5x, TP3=5.5x (TOLERANSLI)
+            # ATR Multipliers: SL=2x, TP1=2.5x, TP2=4.5x, TP3=7x (YÜKSEK KÂR)
             atr_sl = atr_val * 2.0    # Stop Loss: 2x ATR
-            atr_tp1 = atr_val * 2.0   # TP1: 2x ATR (artırıldı: 1.5->2.0)
-            atr_tp2 = atr_val * 3.5   # TP2: 3.5x ATR (artırıldı: 2.5->3.5)
-            atr_tp3 = atr_val * 5.5   # TP3: 5.5x ATR (artırıldı: 4.0->5.5)
+            atr_tp1 = atr_val * 2.5   # TP1: 2.5x ATR (artırıldı)
+            atr_tp2 = atr_val * 4.5   # TP2: 4.5x ATR (artırıldı)
+            atr_tp3 = atr_val * 7.0   # TP3: 7x ATR (artırıldı)
             
             if sinyal == "LONG":
                 tp1_price = price + atr_tp1
@@ -659,10 +659,10 @@ async def pozisyonlari_yokla(exchange):
             fiyat = ticker['last']
             p_fmt = ".8f" if fiyat < 0.01 else ".4f"
             
-            # --- TP1 CHECK (5% TOLERANS) ---
+            # --- TP1 CHECK (10% TOLERANS) ---
             if not tp1_hit:
-                # %5 tolerans: TP1'in %95'ine ulaşınca da sayılır
-                tp1_tolerance = abs(tp1 - giris) * 0.95
+                # %10 tolerans: TP1'in %90'ına ulaşınca da sayılır
+                tp1_tolerance = abs(tp1 - giris) * 0.90
                 tp1_target = giris + tp1_tolerance if yon == "LONG" else giris - tp1_tolerance
                 tp1_reached = (fiyat >= tp1_target) if yon == "LONG" else (fiyat <= tp1_target)
                 if tp1_reached:
@@ -685,10 +685,10 @@ async def pozisyonlari_yokla(exchange):
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue  # Check other TPs next cycle
             
-            # --- TP2 CHECK (5% TOLERANS) ---
+            # --- TP2 CHECK (10% TOLERANS) ---
             if tp1_hit and not tp2_hit:
-                # %5 tolerans: TP2'nin %95'ine ulaşınca da sayılır
-                tp2_tolerance = abs(tp2 - giris) * 0.95
+                # %10 tolerans: TP2'nin %90'ına ulaşınca da sayılır
+                tp2_tolerance = abs(tp2 - giris) * 0.90
                 tp2_target = giris + tp2_tolerance if yon == "LONG" else giris - tp2_tolerance
                 tp2_reached = (fiyat >= tp2_target) if yon == "LONG" else (fiyat <= tp2_target)
                 if tp2_reached:
@@ -739,10 +739,10 @@ async def pozisyonlari_yokla(exchange):
                 except Exception as trail_err:
                     print(f"⚠️ Trailing Hesaplama Hatası ({coin}): {trail_err}")
             
-            # --- TP3 CHECK (FULL EXIT - 5% TOLERANS) ---
+            # --- TP3 CHECK (FULL EXIT - 10% TOLERANS) ---
             if tp1_hit and tp2_hit:
-                # %5 tolerans: TP3'ün %95'ine ulaşınca da sayılır
-                tp3_tolerance = abs(tp3 - giris) * 0.95
+                # %10 tolerans: TP3'ün %90'ına ulaşınca da sayılır
+                tp3_tolerance = abs(tp3 - giris) * 0.90
                 tp3_target = giris + tp3_tolerance if yon == "LONG" else giris - tp3_tolerance
                 tp3_reached = (fiyat >= tp3_target) if yon == "LONG" else (fiyat <= tp3_target)
                 if tp3_reached:
