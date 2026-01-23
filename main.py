@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V5.1: ATR) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.4: SCORE+VOLUME+TRAILING) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -358,7 +358,7 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.2 HTF SCANNING...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.4 SCORING+TRAILING...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -443,14 +443,15 @@ async def piyasayi_tarama(exchange):
         if pozisyon_acik_mi(coin):
             continue  # Wait until current position closes
         
-        # ========== 📊 100 PUANLIK SKORLAMA SİSTEMİ ==========
+        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.4 ==========
         # Ağırlıklar:
         # - BTC Skoru: 30 puan (piyasa yönü - en önemli)
         # - 4H HTF Trend: 25 puan (yüksek zaman dilimi teyidi)
         # - SMA200 Trend: 20 puan (ana fiyat trendi)
-        # - ADX Güç: 15 puan (trend gücü)
-        # - RSI Seviye: 10 puan (momentum)
-        # TOPLAM: 100 puan, %70+ = Sinyal
+        # - RSI Seviye: 15 puan (momentum) [ARTIRILDI]
+        # - Hacim: 10 puan (coin bazlı volume) [YENİ]
+        # - ADX: 10 puan (trend gücü) [DÜŞÜRÜLDÜ]
+        # TOPLAM: ~110 puan max, %70+ = Sinyal
         
         long_score = 0
         short_score = 0
@@ -494,43 +495,71 @@ async def piyasayi_tarama(exchange):
             short_score += 20
             short_breakdown.append("SMA200:20")
         
-        # 4️⃣ ADX GÜÇ (15 puan)
+        # 4️⃣ ADX GÜÇ (10 puan) [DÜŞÜRÜLDÜ]
         if adx_val > 30:
-            long_score += 15
-            short_score += 15
-            long_breakdown.append("ADX:15")
-            short_breakdown.append("ADX:15")
-        elif adx_val > 25:
             long_score += 10
             short_score += 10
             long_breakdown.append("ADX:10")
             short_breakdown.append("ADX:10")
-        elif adx_val > 20:
-            long_score += 5
-            short_score += 5
-            long_breakdown.append("ADX:5")
-            short_breakdown.append("ADX:5")
-        
-        # 5️⃣ RSI SEVİYE (10 puan)
-        if rsi_val < 30:
-            long_score += 10
-            long_breakdown.append("RSI:10")
-        elif rsi_val < 35:
+        elif adx_val > 25:
             long_score += 7
-            long_breakdown.append("RSI:7")
+            short_score += 7
+            long_breakdown.append("ADX:7")
+            short_breakdown.append("ADX:7")
+        elif adx_val > 20:
+            long_score += 4
+            short_score += 4
+            long_breakdown.append("ADX:4")
+            short_breakdown.append("ADX:4")
+        
+        # 5️⃣ RSI SEVİYE (15 puan) [ARTIRILDI]
+        if rsi_val < 30:
+            long_score += 15
+            long_breakdown.append("RSI:15")
+        elif rsi_val < 35:
+            long_score += 12
+            long_breakdown.append("RSI:12")
         elif rsi_val < 40:
+            long_score += 8
+            long_breakdown.append("RSI:8")
+        elif rsi_val < 45:
             long_score += 4
             long_breakdown.append("RSI:4")
             
         if rsi_val > 70:
-            short_score += 10
-            short_breakdown.append("RSI:10")
+            short_score += 15
+            short_breakdown.append("RSI:15")
         elif rsi_val > 65:
-            short_score += 7
-            short_breakdown.append("RSI:7")
+            short_score += 12
+            short_breakdown.append("RSI:12")
         elif rsi_val > 60:
+            short_score += 8
+            short_breakdown.append("RSI:8")
+        elif rsi_val > 55:
             short_score += 4
             short_breakdown.append("RSI:4")
+        
+        # 6️⃣ HACİM ANALİZİ (10 puan) [YENİ]
+        vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
+        curr_vol = df['volume'].iloc[-1]
+        vol_ratio = curr_vol / vol_sma20 if vol_sma20 > 0 else 1
+        
+        # Yüksek hacim = Güçlü sinyal teyidi
+        if vol_ratio > 1.5:  # %50 üzeri hacim
+            long_score += 10
+            short_score += 10
+            long_breakdown.append("VOL:10")
+            short_breakdown.append("VOL:10")
+        elif vol_ratio > 1.25:  # %25 üzeri hacim
+            long_score += 7
+            short_score += 7
+            long_breakdown.append("VOL:7")
+            short_breakdown.append("VOL:7")
+        elif vol_ratio > 1.0:  # Ortalama üzeri
+            long_score += 3
+            short_score += 3
+            long_breakdown.append("VOL:3")
+            short_breakdown.append("VOL:3")
         
         # ========== SİNYAL KARARI (%70 EŞİĞİ) ==========
         ESIK = 70  # Minimum skor eşiği
@@ -544,11 +573,11 @@ async def piyasayi_tarama(exchange):
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
-            # ATR Multipliers: SL=2x, TP1=1.5x, TP2=2.5x, TP3=4x
+            # ATR Multipliers: SL=2x, TP1=2x, TP2=3.5x, TP3=5.5x (TOLERANSLI)
             atr_sl = atr_val * 2.0    # Stop Loss: 2x ATR
-            atr_tp1 = atr_val * 1.5   # TP1: 1.5x ATR  
-            atr_tp2 = atr_val * 2.5   # TP2: 2.5x ATR
-            atr_tp3 = atr_val * 4.0   # TP3: 4x ATR (runner)
+            atr_tp1 = atr_val * 2.0   # TP1: 2x ATR (artırıldı: 1.5->2.0)
+            atr_tp2 = atr_val * 3.5   # TP2: 3.5x ATR (artırıldı: 2.5->3.5)
+            atr_tp3 = atr_val * 5.5   # TP3: 5.5x ATR (artırıldı: 4.0->5.5)
             
             if sinyal == "LONG":
                 tp1_price = price + atr_tp1
@@ -630,9 +659,12 @@ async def pozisyonlari_yokla(exchange):
             fiyat = ticker['last']
             p_fmt = ".8f" if fiyat < 0.01 else ".4f"
             
-            # --- TP1 CHECK ---
+            # --- TP1 CHECK (5% TOLERANS) ---
             if not tp1_hit:
-                tp1_reached = (fiyat >= tp1) if yon == "LONG" else (fiyat <= tp1)
+                # %5 tolerans: TP1'in %95'ine ulaşınca da sayılır
+                tp1_tolerance = abs(tp1 - giris) * 0.95
+                tp1_target = giris + tp1_tolerance if yon == "LONG" else giris - tp1_tolerance
+                tp1_reached = (fiyat >= tp1_target) if yon == "LONG" else (fiyat <= tp1_target)
                 if tp1_reached:
                     # Move SL to TP1 (Trailing Stop / Breakeven+)
                     with sqlite3.connect("titanium_live.db") as conn:
@@ -653,9 +685,12 @@ async def pozisyonlari_yokla(exchange):
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue  # Check other TPs next cycle
             
-            # --- TP2 CHECK ---
+            # --- TP2 CHECK (5% TOLERANS) ---
             if tp1_hit and not tp2_hit:
-                tp2_reached = (fiyat >= tp2) if yon == "LONG" else (fiyat <= tp2)
+                # %5 tolerans: TP2'nin %95'ine ulaşınca da sayılır
+                tp2_tolerance = abs(tp2 - giris) * 0.95
+                tp2_target = giris + tp2_tolerance if yon == "LONG" else giris - tp2_tolerance
+                tp2_reached = (fiyat >= tp2_target) if yon == "LONG" else (fiyat <= tp2_target)
                 if tp2_reached:
                     # Move SL to TP2 (Trailing Stop for Runner)
                     with sqlite3.connect("titanium_live.db") as conn:
@@ -676,9 +711,40 @@ async def pozisyonlari_yokla(exchange):
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue
             
-            # --- TP3 CHECK (FULL EXIT) ---
+            # --- TP2 SONRASI TRAILING STOP (YENİ!) ---
             if tp1_hit and tp2_hit:
-                tp3_reached = (fiyat >= tp3) if yon == "LONG" else (fiyat <= tp3)
+                # ATR hesapla - trailing için
+                try:
+                    ohlcv = await exchange.fetch_ohlcv(f"{coin}/USDT", '1h', limit=20)
+                    df_trail = pd.DataFrame(ohlcv, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+                    atr_trail = calculate_atr(df_trail, 14).iloc[-1]
+                    trailing_distance = atr_trail * 1.5  # 1.5x ATR trailing mesafesi
+                    
+                    if yon == "LONG":
+                        # Yeni potansiyel SL = Mevcut fiyat - trailing mesafe
+                        new_trail_sl = fiyat - trailing_distance
+                        # Sadece yukarı doğru güncelle (sl'den yüksekse)
+                        if new_trail_sl > sl:
+                            with sqlite3.connect("titanium_live.db") as conn:
+                                conn.execute("UPDATE islemler SET sl=? WHERE id=?", (new_trail_sl, id))
+                            print(f"📈 TRAILING: {coin} SL güncellendi: ${sl:{p_fmt}} -> ${new_trail_sl:{p_fmt}}")
+                            sl = new_trail_sl  # Güncel SL'i kullan
+                    else:  # SHORT
+                        new_trail_sl = fiyat + trailing_distance
+                        if new_trail_sl < sl:
+                            with sqlite3.connect("titanium_live.db") as conn:
+                                conn.execute("UPDATE islemler SET sl=? WHERE id=?", (new_trail_sl, id))
+                            print(f"📉 TRAILING: {coin} SL güncellendi: ${sl:{p_fmt}} -> ${new_trail_sl:{p_fmt}}")
+                            sl = new_trail_sl
+                except Exception as trail_err:
+                    print(f"⚠️ Trailing Hesaplama Hatası ({coin}): {trail_err}")
+            
+            # --- TP3 CHECK (FULL EXIT - 5% TOLERANS) ---
+            if tp1_hit and tp2_hit:
+                # %5 tolerans: TP3'ün %95'ine ulaşınca da sayılır
+                tp3_tolerance = abs(tp3 - giris) * 0.95
+                tp3_target = giris + tp3_tolerance if yon == "LONG" else giris - tp3_tolerance
+                tp3_reached = (fiyat >= tp3_target) if yon == "LONG" else (fiyat <= tp3_target)
                 if tp3_reached:
                     pnl3 = ((tp3 - giris) / giris * 100) if yon == "LONG" else ((giris - tp3) / giris * 100)
                     # Calculate weighted average PnL (33% + 33% + 34%)
@@ -701,7 +767,7 @@ async def pozisyonlari_yokla(exchange):
 🎯 <b>TP3:</b> ${tp3:{p_fmt}} ✅
 📈 <b>Toplam Kâr:</b> +{total_pnl:.2f}%
 
-🤖 <i>Titanium V5.0 - Triple TP Success!</i>
+🤖 <i>Titanium V5.4 - Trailing TP Success!</i>
 """
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue
