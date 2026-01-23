@@ -212,10 +212,11 @@ async def gunluk_rapor_gonder():
         print(f"📊 {bugun} Günlük Rapor Hazırlanıyor...")
 
         with sqlite3.connect("titanium_live.db") as conn:
+            # TP hit bilgilerini de çek
             query = """
-            SELECT coin, yon, durum, pnl_yuzde, kapanis_zamani 
+            SELECT coin, yon, durum, pnl_yuzde, tp1_hit, tp2_hit, kapanis_zamani 
             FROM islemler 
-            WHERE durum IN ('KAZANDI', 'KAYBETTI') 
+            WHERE durum IN ('KAZANDI', 'KAYBETTI', 'PARTIAL') 
             AND date(kapanis_zamani) = ?
             """
             df_rapor = pd.read_sql_query(query, conn, params=(bugun,))
@@ -224,23 +225,65 @@ async def gunluk_rapor_gonder():
             return
 
         toplam_pnl = df_rapor['pnl_yuzde'].sum()
-        win_count = len(df_rapor[df_rapor['durum'] == 'KAZANDI'])
+        
+        # Detaylı istatistikler
+        full_win = len(df_rapor[df_rapor['durum'] == 'KAZANDI'])  # TP3 tam kazanç
+        partial_win = len(df_rapor[df_rapor['durum'] == 'PARTIAL'])  # Kısmi kazanç (TP1/TP2 hit + SL)
+        loss_count = len(df_rapor[df_rapor['durum'] == 'KAYBETTI'])  # Tam kayıp
         total_count = len(df_rapor)
+        
+        # Kazanç oranı (tam + kısmi kazanç)
+        win_count = full_win + partial_win
         win_rate = (win_count / total_count) * 100 if total_count > 0 else 0
         pnl_ikon = "✅" if toplam_pnl > 0 else "🔻"
         
         mesaj = f"📅 <b>GÜNLÜK RAPOR ({bugun})</b>\n\n"
+        
         for index, row in df_rapor.iterrows():
-            durum_ikon = "W" if row['durum'] == 'KAZANDI' else "L"
-            mesaj += f"<code>{row['coin'][:4]:<5} | {row['yon'][0]:<1} | {durum_ikon} | %{row['pnl_yuzde']:.1f}</code>\n"
+            # W veya L
+            is_win = row['durum'] in ['KAZANDI', 'PARTIAL']
+            wl = "W" if is_win else "L"
             
-        mesaj += f"\n🔢 <b>Toplam:</b> {total_count} | 🎯 <b>WR:</b> %{win_rate:.0f}"
-        mesaj += f"\n💰 <b>NET PNL:</b> {pnl_ikon} <b>%{toplam_pnl:.2f}</b>"
+            # Hangi TP'ler vuruldu
+            tp_list = []
+            if row.get('tp1_hit', 0):
+                tp_list.append("TP1")
+            if row.get('tp2_hit', 0):
+                tp_list.append("TP2")
+            if row['durum'] == 'KAZANDI':
+                tp_list.append("TP3")
+            
+            tp_str = ",".join(tp_list) if tp_list else "-"
+            
+            # PnL
+            pnl_val = row['pnl_yuzde']
+            pnl_str = f"+{pnl_val:.1f}" if pnl_val >= 0 else f"{pnl_val:.1f}"
+            
+            mesaj += f"<code>{row['coin'][:4]:<5}|{row['yon'][0]}|{wl}|{tp_str}|{pnl_str}%</code>\n"
+        
+        mesaj += f"\n📊 <b>İSTATİSTİKLER</b>\n"
+        mesaj += f"🏆 <b>Tam Kazanç:</b> {full_win} | ⚡ <b>Kısmi:</b> {partial_win} | ❌ <b>Kayıp:</b> {loss_count}\n"
+        mesaj += f"🔢 <b>Toplam:</b> {total_count} | 🎯 <b>WR:</b> %{win_rate:.0f}\n"
+        mesaj += f"💰 <b>NET PNL:</b> {pnl_ikon} <b>%{toplam_pnl:.2f}</b>\n"
+        
+        # 💵 $100 SİMÜLASYONU
+        yatirim_per_sinyal = 100  # Her sinyale $100
+        toplam_yatirim = total_count * yatirim_per_sinyal
+        toplam_kar = sum([(row['pnl_yuzde'] / 100) * yatirim_per_sinyal for _, row in df_rapor.iterrows()])
+        final_bakiye = toplam_yatirim + toplam_kar
+        kar_ikon = "📈" if toplam_kar >= 0 else "📉"
+        
+        mesaj += f"\n💵 <b>$100 SİMÜLASYONU</b>\n"
+        mesaj += f"🏦 <b>Yatırım:</b> ${toplam_yatirim} ({total_count} x $100)\n"
+        mesaj += f"{kar_ikon} <b>Kâr/Zarar:</b> ${toplam_kar:+.2f}\n"
+        mesaj += f"💎 <b>Final:</b> <b>${final_bakiye:.2f}</b>"
 
         await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         print(f"❌ Günlük Rapor Hatası: {e}")
+
+
 
 # ==========================================
 # 🧠 BÖLÜM 4: AI HABER ANALİZİ
@@ -864,10 +907,15 @@ async def main():
 
     try:
         while True:
-            simdi = datetime.now()
+            # İstanbul saati (UTC+3)
+            from datetime import timezone, timedelta
+            istanbul_tz = timezone(timedelta(hours=3))
+            simdi = datetime.now(istanbul_tz)
             bugun_str = simdi.strftime("%Y-%m-%d")
             
+            # Gün sonu raporu - İstanbul saati 23:55
             if simdi.hour == 23 and simdi.minute >= 55 and SON_RAPOR_TARIHI != bugun_str:
+                print(f"📊 Gün sonu raporu gönderiliyor... (İstanbul: {simdi.strftime('%H:%M')})")
                 await gunluk_rapor_gonder()
                 SON_RAPOR_TARIHI = bugun_str
             
