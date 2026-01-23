@@ -679,13 +679,35 @@ async def pozisyonlari_yokla(exchange):
 🎯 <b>TP1:</b> ${tp1:{p_fmt}}
 📈 <b>Kâr:</b> +{pnl1:.2f}%
 
-� <b>YENİ SL:</b> ${tp1:{p_fmt}} (Kâr Kilitlendi!)
-�📌 <i>%33 Kapatıldı - Kalan %67 Risksiz!</i>
+🔒 <b>YENİ SL:</b> ${tp1:{p_fmt}} (Kâr Kilitlendi!)
+📌 <i>%33 Kapatıldı - Kalan %67 Risksiz!</i>
 """
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue  # Check other TPs next cycle
             
-            # --- TP2 CHECK (10% TOLERANS) ---
+            # --- MOMENTUM KONTROLÜ (TP1 SONRASI) ---
+            momentum_strong = False
+            if tp1_hit:
+                try:
+                    ohlcv_mom = await exchange.fetch_ohlcv(f"{coin}/USDT", '1h', limit=50)
+                    df_mom = pd.DataFrame(ohlcv_mom, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+                    rsi_now = calculate_rsi(df_mom['close']).iloc[-1]
+                    sma20 = df_mom['close'].rolling(20).mean().iloc[-1]
+                    sma50 = df_mom['close'].rolling(50).mean().iloc[-1]
+                    
+                    if yon == "LONG":
+                        # LONG için: RSI > 45 VE fiyat > SMA20 = momentum güçlü
+                        momentum_strong = (rsi_now > 45) and (fiyat > sma20)
+                    else:  # SHORT
+                        # SHORT için: RSI < 55 VE fiyat < SMA20 = momentum güçlü
+                        momentum_strong = (rsi_now < 55) and (fiyat < sma20)
+                    
+                    print(f"📊 MOMENTUM {coin}: RSI={rsi_now:.1f}, SMA20={'✅' if (fiyat > sma20 if yon == 'LONG' else fiyat < sma20) else '❌'} -> {'GÜÇLÜ' if momentum_strong else 'ZAYIF'}")
+                except Exception as mom_err:
+                    print(f"⚠️ Momentum Hatası ({coin}): {mom_err}")
+                    momentum_strong = True  # Hata olursa default olarak devam et
+            
+            # --- TP2 CHECK (10% TOLERANS + MOMENTUM) ---
             if tp1_hit and not tp2_hit:
                 # %10 tolerans: TP2'nin %90'ına ulaşınca da sayılır
                 tp2_tolerance = abs(tp2 - giris) * 0.90
@@ -697,6 +719,10 @@ async def pozisyonlari_yokla(exchange):
                         conn.execute("UPDATE islemler SET tp2_hit=1, sl=? WHERE id=?", (tp2, id))
                     
                     pnl2 = ((tp2 - giris) / giris * 100) if yon == "LONG" else ((giris - tp2) / giris * 100)
+                    
+                    # Momentum güçlüyse TP3'e doğru devam mesajı
+                    devam_msg = "🚀 MOMENTUM GÜÇLÜ - TP3'e Devam!" if momentum_strong else "📌 %66 Kapatıldı - Kalan %34 TP3'e Bırakıldı"
+                    
                     mesaj = f"""
 🎯🎯 <b>TP2 ULAŞILDI!</b> ✅✅
 
@@ -706,7 +732,7 @@ async def pozisyonlari_yokla(exchange):
 📈 <b>Kâr:</b> +{pnl2:.2f}%
 
 🔒 <b>YENİ SL:</b> ${tp2:{p_fmt}} (TP2 Kilitlendi!)
-📌 <i>%66 Kapatıldı - Kalan %34 TP3'e Bırakıldı</i>
+{devam_msg}
 """
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue
