@@ -666,9 +666,9 @@ async def piyasayi_tarama(exchange):
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) [1.5x ATR]
-🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) [2.5x ATR]
-🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [4x ATR]
+🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) [2.5x ATR]
+🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) [4.5x ATR]
+🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [7x ATR]
 🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
 
 📌 <i>%{skor_deger} Güven Skoru ile Sinyal</i>
@@ -898,7 +898,7 @@ async def main():
     exchange = ccxt.kucoin(exchange_config)
     
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V4.5 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.4 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
