@@ -339,6 +339,122 @@ async def haberleri_kontrol_et():
         except: pass
 
 # ==========================================
+# 🧠 BÖLÜM 4.5: AKILLI TRAILING - TREND GÜCÜ ANALİZİ
+# ==========================================
+async def trend_gucunu_analiz_et(exchange, coin, yon, mevcut_fiyat):
+    """
+    TP hit sonrası trend gücünü analiz et
+    
+    Kriterler (her biri 25 puan):
+    1. RSI: LONG için >55, SHORT için <45
+    2. Fiyat vs SMA20: Trendle uyumlu mu?
+    3. ADX: >25 ise trend güçlü
+    4. Hacim: Ortalama üstü mü?
+    
+    Returns:
+        trend_gucu (str): 'GUCLU', 'ORTA', 'ZAYIF'
+        sl_multiplier (float): ATR çarpanı
+        analiz_detay (dict): Detaylı analiz bilgisi
+    """
+    try:
+        ohlcv = await exchange.fetch_ohlcv(f"{coin}/USDT", '1h', limit=50)
+        df = pd.DataFrame(ohlcv, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        
+        # İndikatörleri hesapla
+        rsi_now = calculate_rsi(df['close']).iloc[-1]
+        sma20 = df['close'].rolling(20).mean().iloc[-1]
+        adx_now = calculate_adx(df).iloc[-1]
+        atr_now = calculate_atr(df, 14).iloc[-1]
+        
+        # Hacim analizi
+        vol_sma = df['volume'].rolling(20).mean().iloc[-1]
+        curr_vol = df['volume'].iloc[-1]
+        vol_ratio = curr_vol / vol_sma if vol_sma > 0 else 1
+        
+        puan = 0
+        detay = {
+            'rsi': rsi_now,
+            'rsi_ok': False,
+            'sma20_ok': False,
+            'adx': adx_now,
+            'adx_ok': False,
+            'vol_ratio': vol_ratio,
+            'vol_ok': False,
+            'atr': atr_now
+        }
+        
+        # 1. RSI Kontrolü (25 puan)
+        if yon == "LONG":
+            if rsi_now > 55:
+                puan += 25
+                detay['rsi_ok'] = True
+            elif rsi_now > 45:
+                puan += 15  # Nötr bölge
+        else:  # SHORT
+            if rsi_now < 45:
+                puan += 25
+                detay['rsi_ok'] = True
+            elif rsi_now < 55:
+                puan += 15  # Nötr bölge
+        
+        # 2. Fiyat vs SMA20 (25 puan)
+        if yon == "LONG":
+            if mevcut_fiyat > sma20:
+                puan += 25
+                detay['sma20_ok'] = True
+        else:  # SHORT
+            if mevcut_fiyat < sma20:
+                puan += 25
+                detay['sma20_ok'] = True
+        
+        # 3. ADX Kontrolü (25 puan)
+        if adx_now > 30:
+            puan += 25
+            detay['adx_ok'] = True
+        elif adx_now > 25:
+            puan += 18
+            detay['adx_ok'] = True
+        elif adx_now > 20:
+            puan += 10
+        
+        # 4. Hacim Kontrolü (25 puan)
+        if vol_ratio > 1.5:
+            puan += 25
+            detay['vol_ok'] = True
+        elif vol_ratio > 1.2:
+            puan += 18
+            detay['vol_ok'] = True
+        elif vol_ratio > 1.0:
+            puan += 10
+        
+        # Trend gücü ve SL çarpanı belirleme
+        if puan >= 75:
+            trend_gucu = "GUCLU"
+            sl_multiplier = 1.5  # Geniş SL - Gideni tutma!
+        elif puan >= 40:
+            trend_gucu = "ORTA"
+            sl_multiplier = 1.0  # Dengeli SL
+        else:
+            trend_gucu = "ZAYIF"
+            sl_multiplier = 0.0  # Buffer moduna geç
+        
+        detay['puan'] = puan
+        
+        print(f"📊 TREND ANALİZİ: {coin} ({yon})")
+        print(f"   RSI: {rsi_now:.1f} {'✅' if detay['rsi_ok'] else '❌'}")
+        print(f"   SMA20: {'✅' if detay['sma20_ok'] else '❌'}")
+        print(f"   ADX: {adx_now:.1f} {'✅' if detay['adx_ok'] else '❌'}")
+        print(f"   Hacim: {vol_ratio:.2f}x {'✅' if detay['vol_ok'] else '❌'}")
+        print(f"   TOPLAM: {puan}/100 → {trend_gucu}")
+        
+        return trend_gucu, sl_multiplier, detay
+        
+    except Exception as e:
+        print(f"⚠️ Trend Analiz Hatası ({coin}): {e}")
+        # Hata durumunda güvenli mod - orta seviye
+        return "ORTA", 1.0, {'puan': 50, 'atr': 0}
+
+# ==========================================
 # 🚀 BÖLÜM 5: STRATEJİ MOTORU (VOLUME + SCORING)
 # ==========================================
 
@@ -702,18 +818,43 @@ async def pozisyonlari_yokla(exchange):
             fiyat = ticker['last']
             p_fmt = ".8f" if fiyat < 0.01 else ".4f"
             
-            # --- TP1 CHECK (10% TOLERANS) ---
+            # --- TP1 CHECK (10% TOLERANS + AKILLI TRAILING) ---
             if not tp1_hit:
                 # %10 tolerans: TP1'in %90'ına ulaşınca da sayılır
                 tp1_tolerance = abs(tp1 - giris) * 0.90
                 tp1_target = giris + tp1_tolerance if yon == "LONG" else giris - tp1_tolerance
                 tp1_reached = (fiyat >= tp1_target) if yon == "LONG" else (fiyat <= tp1_target)
                 if tp1_reached:
-                    # Move SL to TP1 (Trailing Stop / Breakeven+)
+                    # 🧠 AKILLI TRAILING: Trend gücünü analiz et
+                    trend_gucu, sl_multiplier, analiz = await trend_gucunu_analiz_et(exchange, coin, yon, fiyat)
+                    atr_now = analiz.get('atr', abs(tp1 - giris) * 0.5)  # Fallback ATR
+                    trend_puan = analiz.get('puan', 50)
+                    
+                    # SL'i trend gücüne göre belirle
+                    if trend_gucu == "GUCLU" or trend_gucu == "ORTA":
+                        # ATR bazlı geniş SL - Gideni tutma!
+                        if yon == "LONG":
+                            new_sl = fiyat - (atr_now * sl_multiplier)
+                        else:  # SHORT
+                            new_sl = fiyat + (atr_now * sl_multiplier)
+                    else:
+                        # ZAYIF trend - Sıkı SL, kârı koru!
+                        buffer = 0.005  # %0.5 buffer
+                        if yon == "LONG":
+                            new_sl = tp1 * (1 - buffer)
+                        else:  # SHORT
+                            new_sl = tp1 * (1 + buffer)
+                    
                     with sqlite3.connect("titanium_live.db") as conn:
-                        conn.execute("UPDATE islemler SET tp1_hit=1, sl=? WHERE id=?", (tp1, id))
+                        conn.execute("UPDATE islemler SET tp1_hit=1, sl=? WHERE id=?", (new_sl, id))
                     
                     pnl1 = ((tp1 - giris) / giris * 100) if yon == "LONG" else ((giris - tp1) / giris * 100)
+                    
+                    # Trend göstergeleri
+                    trend_ikon = "🟢" if trend_gucu == "GUCLU" else ("🟡" if trend_gucu == "ORTA" else "🔴")
+                    sl_tipi = f"ATR×{sl_multiplier}" if sl_multiplier > 0 else "TP1±0.5%"
+                    gideni_tutma = "🚀 Gideni Tutmuyoruz!" if trend_gucu == "GUCLU" else ("📊 Dengeli" if trend_gucu == "ORTA" else "🔒 Kârı Koruyoruz!")
+                    
                     mesaj = f"""
 🎯 <b>TP1 ULAŞILDI!</b> ✅
 
@@ -722,8 +863,15 @@ async def pozisyonlari_yokla(exchange):
 🎯 <b>TP1:</b> ${tp1:{p_fmt}}
 📈 <b>Kâr:</b> +{pnl1:.2f}%
 
-🔒 <b>YENİ SL:</b> ${tp1:{p_fmt}} (Kâr Kilitlendi!)
-📌 <i>%33 Kapatıldı - Kalan %67 Risksiz!</i>
+{trend_ikon} <b>Trend Gücü:</b> {trend_gucu} ({trend_puan}/100)
+   ├─ RSI: {'✅' if analiz.get('rsi_ok') else '❌'}
+   ├─ SMA20: {'✅' if analiz.get('sma20_ok') else '❌'}
+   ├─ ADX: {'✅' if analiz.get('adx_ok') else '❌'}
+   └─ Hacim: {'✅' if analiz.get('vol_ok') else '❌'}
+
+{gideni_tutma}
+🔒 <b>YENİ SL:</b> ${new_sl:{p_fmt}} ({sl_tipi})
+📌 <i>%33 Kapatıldı - Kalan %67 Devam!</i>
 """
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue  # Check other TPs next cycle
@@ -750,21 +898,44 @@ async def pozisyonlari_yokla(exchange):
                     print(f"⚠️ Momentum Hatası ({coin}): {mom_err}")
                     momentum_strong = True  # Hata olursa default olarak devam et
             
-            # --- TP2 CHECK (10% TOLERANS + MOMENTUM) ---
+            # --- TP2 CHECK (10% TOLERANS + AKILLI TRAILING) ---
             if tp1_hit and not tp2_hit:
                 # %10 tolerans: TP2'nin %90'ına ulaşınca da sayılır
                 tp2_tolerance = abs(tp2 - giris) * 0.90
                 tp2_target = giris + tp2_tolerance if yon == "LONG" else giris - tp2_tolerance
                 tp2_reached = (fiyat >= tp2_target) if yon == "LONG" else (fiyat <= tp2_target)
                 if tp2_reached:
-                    # Move SL to TP2 (Trailing Stop for Runner)
+                    # 🧠 AKILLI TRAILING: Trend gücünü analiz et
+                    trend_gucu, sl_multiplier, analiz = await trend_gucunu_analiz_et(exchange, coin, yon, fiyat)
+                    atr_now = analiz.get('atr', abs(tp2 - giris) * 0.3)  # Fallback ATR
+                    trend_puan = analiz.get('puan', 50)
+                    
+                    # TP2'de daha agresif trailing - çarpanı artır
+                    sl_multiplier_tp2 = sl_multiplier * 0.8  # TP2'de biraz daha sıkı
+                    
+                    # SL'i trend gücüne göre belirle
+                    if trend_gucu == "GUCLU" or trend_gucu == "ORTA":
+                        # ATR bazlı SL
+                        if yon == "LONG":
+                            new_sl = fiyat - (atr_now * sl_multiplier_tp2)
+                        else:  # SHORT
+                            new_sl = fiyat + (atr_now * sl_multiplier_tp2)
+                    else:
+                        # ZAYIF trend - TP2 + buffer
+                        buffer = 0.003  # %0.3 buffer (TP2'de daha sıkı)
+                        if yon == "LONG":
+                            new_sl = tp2 * (1 - buffer)
+                        else:  # SHORT
+                            new_sl = tp2 * (1 + buffer)
+                    
                     with sqlite3.connect("titanium_live.db") as conn:
-                        conn.execute("UPDATE islemler SET tp2_hit=1, sl=? WHERE id=?", (tp2, id))
+                        conn.execute("UPDATE islemler SET tp2_hit=1, sl=? WHERE id=?", (new_sl, id))
                     
                     pnl2 = ((tp2 - giris) / giris * 100) if yon == "LONG" else ((giris - tp2) / giris * 100)
                     
-                    # Momentum güçlüyse TP3'e doğru devam mesajı
-                    devam_msg = "🚀 MOMENTUM GÜÇLÜ - TP3'e Devam!" if momentum_strong else "📌 %66 Kapatıldı - Kalan %34 TP3'e Bırakıldı"
+                    # Trend göstergeleri
+                    trend_ikon = "🟢" if trend_gucu == "GUCLU" else ("🟡" if trend_gucu == "ORTA" else "🔴")
+                    devam_msg = "🚀 TREND GÜÇLÜ - TP3'e Devam!" if trend_gucu == "GUCLU" else ("� TP3'e Bırakıldı" if trend_gucu == "ORTA" else "🔒 %66 Kilitlendi")
                     
                     mesaj = f"""
 🎯🎯 <b>TP2 ULAŞILDI!</b> ✅✅
@@ -774,7 +945,8 @@ async def pozisyonlari_yokla(exchange):
 🎯 <b>TP2:</b> ${tp2:{p_fmt}}
 📈 <b>Kâr:</b> +{pnl2:.2f}%
 
-🔒 <b>YENİ SL:</b> ${tp2:{p_fmt}} (TP2 Kilitlendi!)
+{trend_ikon} <b>Trend:</b> {trend_gucu} ({trend_puan}/100)
+🔒 <b>YENİ SL:</b> ${new_sl:{p_fmt}}
 {devam_msg}
 """
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
