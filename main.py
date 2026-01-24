@@ -818,6 +818,9 @@ async def pozisyonlari_yokla(exchange):
             fiyat = ticker['last']
             p_fmt = ".8f" if fiyat < 0.01 else ".4f"
             
+            # DEBUG LOG
+            print(f"🔍 {coin}: Fiyat=${fiyat:{p_fmt}} | SL=${sl:{p_fmt}} | TP1=${tp1:{p_fmt}} (hit={tp1_hit}) | TP2=${tp2:{p_fmt}} (hit={tp2_hit}) | TP3=${tp3:{p_fmt}}")
+            
             # --- TP1 CHECK (10% TOLERANS + AKILLI TRAILING) ---
             if not tp1_hit:
                 # %10 tolerans: TP1'in %90'ına ulaşınca da sayılır
@@ -1015,6 +1018,7 @@ async def pozisyonlari_yokla(exchange):
             
             # --- STOP LOSS CHECK ---
             sl_hit = (fiyat <= sl) if yon == "LONG" else (fiyat >= sl)
+            print(f"   SL Check: {yon} | Fiyat={fiyat} | SL={sl} | sl_hit={sl_hit}")
             if sl_hit:
                 # Calculate actual PnL based on which TPs were hit
                 partial_profit = 0.0
