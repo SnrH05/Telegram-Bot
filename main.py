@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V5.5: SCORE+REVERSAL+TRAILING) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.6: SCORE+REVERSAL+USDT-FLOW) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -603,6 +603,83 @@ async def trend_gucunu_analiz_et(exchange, coin, yon, mevcut_fiyat):
 # 🚀 BÖLÜM 5: STRATEJİ MOTORU (VOLUME + SCORING)
 # ==========================================
 
+async def usdt_hacim_akisi_analiz(exchange):
+    """
+    USDT Hacim Akışı Analizi - Piyasa yönünü belirle
+    
+    Mantık:
+    - Birden fazla majör coinin USDT hacmini analiz et
+    - Alış hacmi (yeşil mum) vs Satış hacmi (kırmızı mum) karşılaştır
+    - Net akış pozitifse -> Piyasaya para GİRİYOR (BULLISH)
+    - Net akış negatifse -> Piyasadan para ÇIKIYOR (BEARISH)
+    
+    Returns:
+        usdt_score: -1.0 ile +1.0 arası puan
+        usdt_flow: Net USDT akışı (milyon $)
+        flow_direction: 'INFLOW', 'OUTFLOW', 'NEUTRAL'
+    """
+    try:
+        # Majör coinler - yüksek hacimli
+        major_pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT"]
+        
+        total_buy_volume = 0.0
+        total_sell_volume = 0.0
+        
+        for pair in major_pairs:
+            try:
+                ohlcv = await exchange.fetch_ohlcv(pair, '1h', limit=24)  # Son 24 saat
+                if not ohlcv:
+                    continue
+                
+                df = pd.DataFrame(ohlcv, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+                
+                for i in range(len(df)):
+                    row = df.iloc[i]
+                    # USDT cinsinden hacim = volume * close price
+                    usdt_vol = row['volume'] * row['close']
+                    
+                    # Yeşil mum = Alış baskısı
+                    if row['close'] > row['open']:
+                        total_buy_volume += usdt_vol
+                    # Kırmızı mum = Satış baskısı
+                    else:
+                        total_sell_volume += usdt_vol
+                        
+            except Exception as e:
+                continue
+        
+        # Net akış hesapla
+        net_flow = total_buy_volume - total_sell_volume
+        total_volume = total_buy_volume + total_sell_volume
+        
+        if total_volume == 0:
+            return 0.0, 0.0, 'NEUTRAL'
+        
+        # Akış oranı (-1 ile +1 arası normalize et)
+        flow_ratio = net_flow / total_volume
+        
+        # Skor hesapla (max ±1.0)
+        usdt_score = max(-1.0, min(1.0, flow_ratio * 5))  # 5x amplify
+        
+        # Yön belirle
+        if flow_ratio > 0.05:  # %5+ net alış
+            flow_direction = 'INFLOW'
+        elif flow_ratio < -0.05:  # %5+ net satış
+            flow_direction = 'OUTFLOW'
+        else:
+            flow_direction = 'NEUTRAL'
+        
+        # Milyon $ cinsinden net akış
+        net_flow_millions = net_flow / 1_000_000
+        
+        print(f"💵 USDT AKIŞ: Buy=${total_buy_volume/1e9:.2f}B | Sell=${total_sell_volume/1e9:.2f}B | Net={net_flow_millions:+.1f}M | {flow_direction}")
+        
+        return usdt_score, net_flow_millions, flow_direction
+        
+    except Exception as e:
+        print(f"⚠️ USDT Hacim Analiz Hatası: {e}")
+        return 0.0, 0.0, 'NEUTRAL'
+
 async def btc_piyasa_puani_hesapla(exchange):
     """
     BTC için Piyasa Puanı (-2.5 ile +2.5 arası)
@@ -662,7 +739,7 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.5 SCORING+REVERSAL...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.6 SCORING+REVERSAL+USDT-FLOW...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -675,6 +752,19 @@ async def piyasayi_tarama(exchange):
     else: btc_ikon = "⚪ (Nötr)"
 
     print(f"🌍 BTC SKORU: {btc_score} -> {btc_ikon}")
+    
+    # 2. USDT HACİM AKIŞI ANALİZİ (YENİ!)
+    usdt_score, usdt_flow_m, usdt_direction = await usdt_hacim_akisi_analiz(exchange)
+    
+    # USDT İkon Belirleme
+    if usdt_direction == 'INFLOW':
+        usdt_ikon = "💹 INFLOW" if usdt_score > 0.5 else "📈 Hafif Giriş"
+    elif usdt_direction == 'OUTFLOW':
+        usdt_ikon = "📉 OUTFLOW" if usdt_score < -0.5 else "💸 Hafif Çıkış"
+    else:
+        usdt_ikon = "➡️ Nötr"
+    
+    print(f"💵 USDT AKIŞ SKORU: {usdt_score:.2f} | Net: {usdt_flow_m:+.1f}M$ | {usdt_ikon}")
     
     # 2. COIN VERILERINI CEK
     async def fetch_candle(s):
@@ -747,142 +837,166 @@ async def piyasayi_tarama(exchange):
         if pozisyon_acik_mi(coin):
             continue  # Wait until current position closes
         
-        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.5 (REVERSAL) ==========
-        # Ağırlıklar:
-        # - BTC Skoru: 30 puan (piyasa yönü - en önemli)
-        # - 4H HTF Trend: 25 puan (yüksek zaman dilimi teyidi)
-        # - SMA200 Trend: 20 puan (ana fiyat trendi)
-        # - RSI Seviye: 15 puan (momentum)
-        # - Hacim: 10 puan (coin bazlı volume)
-        # - ADX: 10 puan (trend gücü)
-        # - 🔄 REVERSAL: 30 puan (ani yön değişimi) [YENİ]
-        # TOPLAM: ~140 puan max, %70+ = Sinyal
+        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.6 (100 ÜZERİNDEN) ==========
+        # Ağırlıklar (Toplam: 100 puan):
+        # - BTC Skoru: 20 puan (piyasa yönü - en önemli)
+        # - � REVERSAL: 18 puan (ani yön değişimi)
+        # - 4H HTF Trend: 15 puan (yüksek zaman dilimi teyidi)
+        # - SMA200 Trend: 12 puan (ana fiyat trendi)
+        # - 💵 USDT Akışı: 10 puan (para giriş/çıkışı)
+        # - RSI Seviye: 10 puan (momentum)
+        # - Hacim: 8 puan (coin bazlı volume)
+        # - ADX: 7 puan (trend gücü)
+        # TOPLAM: 100 puan max, 60+ = Sinyal
         
         long_score = 0
         short_score = 0
         long_breakdown = []
         short_breakdown = []
         
-        # 🔄 REVERSAL SKORU HESAPLA (max 30 puan)
+        # 🔄 REVERSAL SKORU HESAPLA (max 18 puan)
         rev_long, rev_short, rev_details = calculate_reversal_score(df)
         
-        # 1️⃣ BTC SKORU (30 puan)
+        # 💵 USDT AKIŞ SKORU (max 10 puan)
+        if usdt_score >= 0.7:
+            long_score += 10
+            long_breakdown.append("USDT:10")
+        elif usdt_score >= 0.4:
+            long_score += 7
+            long_breakdown.append("USDT:7")
+        elif usdt_score >= 0.1:
+            long_score += 3
+            long_breakdown.append("USDT:3")
+        
+        if usdt_score <= -0.7:
+            short_score += 10
+            short_breakdown.append("USDT:10")
+        elif usdt_score <= -0.4:
+            short_score += 7
+            short_breakdown.append("USDT:7")
+        elif usdt_score <= -0.1:
+            short_score += 3
+            short_breakdown.append("USDT:3")
+        
+        # 1️⃣ BTC SKORU (max 20 puan)
         if btc_score >= 1.5:
-            long_score += 30
-            long_breakdown.append("BTC:30")
+            long_score += 20
+            long_breakdown.append("BTC:20")
         elif btc_score >= 1.0:
-            long_score += 25
-            long_breakdown.append("BTC:25")
-        elif btc_score >= 0.5:
             long_score += 15
             long_breakdown.append("BTC:15")
+        elif btc_score >= 0.5:
+            long_score += 10
+            long_breakdown.append("BTC:10")
             
         if btc_score <= -1.5:
-            short_score += 30
-            short_breakdown.append("BTC:30")
+            short_score += 20
+            short_breakdown.append("BTC:20")
         elif btc_score <= -1.0:
-            short_score += 25
-            short_breakdown.append("BTC:25")
-        elif btc_score <= -0.5:
             short_score += 15
             short_breakdown.append("BTC:15")
-        
-        # 2️⃣ 4H HTF TREND (25 puan)
-        if htf_bullish:
-            long_score += 25
-            long_breakdown.append("HTF:25")
-        if htf_bearish:
-            short_score += 25
-            short_breakdown.append("HTF:25")
-        
-        # 3️⃣ SMA200 TREND (20 puan)
-        if price > curr['sma200']:
-            long_score += 20
-            long_breakdown.append("SMA200:20")
-        if price < curr['sma200']:
-            short_score += 20
-            short_breakdown.append("SMA200:20")
-        
-        # 4️⃣ ADX GÜÇ (10 puan) [DÜŞÜRÜLDÜ]
-        if adx_val > 30:
-            long_score += 10
+        elif btc_score <= -0.5:
             short_score += 10
-            long_breakdown.append("ADX:10")
-            short_breakdown.append("ADX:10")
-        elif adx_val > 25:
+            short_breakdown.append("BTC:10")
+        
+        # 2️⃣ 4H HTF TREND (max 15 puan)
+        if htf_bullish:
+            long_score += 15
+            long_breakdown.append("HTF:15")
+        if htf_bearish:
+            short_score += 15
+            short_breakdown.append("HTF:15")
+        
+        # 3️⃣ SMA200 TREND (max 12 puan)
+        if price > curr['sma200']:
+            long_score += 12
+            long_breakdown.append("SMA200:12")
+        if price < curr['sma200']:
+            short_score += 12
+            short_breakdown.append("SMA200:12")
+        
+        # 4️⃣ ADX GÜÇ (max 7 puan)
+        if adx_val > 30:
             long_score += 7
             short_score += 7
             long_breakdown.append("ADX:7")
             short_breakdown.append("ADX:7")
+        elif adx_val > 25:
+            long_score += 5
+            short_score += 5
+            long_breakdown.append("ADX:5")
+            short_breakdown.append("ADX:5")
         elif adx_val > 20:
-            long_score += 4
-            short_score += 4
-            long_breakdown.append("ADX:4")
-            short_breakdown.append("ADX:4")
+            long_score += 3
+            short_score += 3
+            long_breakdown.append("ADX:3")
+            short_breakdown.append("ADX:3")
         
-        # 5️⃣ RSI SEVİYE (15 puan) [ARTIRILDI]
+        # 5️⃣ RSI SEVİYE (max 10 puan)
         if rsi_val < 30:
-            long_score += 15
-            long_breakdown.append("RSI:15")
+            long_score += 10
+            long_breakdown.append("RSI:10")
         elif rsi_val < 35:
-            long_score += 12
-            long_breakdown.append("RSI:12")
-        elif rsi_val < 40:
             long_score += 8
             long_breakdown.append("RSI:8")
+        elif rsi_val < 40:
+            long_score += 5
+            long_breakdown.append("RSI:5")
         elif rsi_val < 45:
-            long_score += 4
-            long_breakdown.append("RSI:4")
+            long_score += 3
+            long_breakdown.append("RSI:3")
             
         if rsi_val > 70:
-            short_score += 15
-            short_breakdown.append("RSI:15")
+            short_score += 10
+            short_breakdown.append("RSI:10")
         elif rsi_val > 65:
-            short_score += 12
-            short_breakdown.append("RSI:12")
-        elif rsi_val > 60:
             short_score += 8
             short_breakdown.append("RSI:8")
+        elif rsi_val > 60:
+            short_score += 5
+            short_breakdown.append("RSI:5")
         elif rsi_val > 55:
-            short_score += 4
-            short_breakdown.append("RSI:4")
+            short_score += 3
+            short_breakdown.append("RSI:3")
         
-        # 6️⃣ HACİM ANALİZİ (10 puan) [YENİ]
+        # 6️⃣ HACİM ANALİZİ (max 8 puan)
         vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
         curr_vol = df['volume'].iloc[-1]
         vol_ratio = curr_vol / vol_sma20 if vol_sma20 > 0 else 1
         
-        # Yüksek hacim = Güçlü sinyal teyidi
         if vol_ratio > 1.5:  # %50 üzeri hacim
-            long_score += 10
-            short_score += 10
-            long_breakdown.append("VOL:10")
-            short_breakdown.append("VOL:10")
+            long_score += 8
+            short_score += 8
+            long_breakdown.append("VOL:8")
+            short_breakdown.append("VOL:8")
         elif vol_ratio > 1.25:  # %25 üzeri hacim
-            long_score += 7
-            short_score += 7
-            long_breakdown.append("VOL:7")
-            short_breakdown.append("VOL:7")
+            long_score += 5
+            short_score += 5
+            long_breakdown.append("VOL:5")
+            short_breakdown.append("VOL:5")
         elif vol_ratio > 1.0:  # Ortalama üzeri
-            long_score += 3
-            short_score += 3
-            long_breakdown.append("VOL:3")
-            short_breakdown.append("VOL:3")
+            long_score += 2
+            short_score += 2
+            long_breakdown.append("VOL:2")
+            short_breakdown.append("VOL:2")
         
-        # 7️⃣ ANİ YÖN DEĞİŞİMİ - REVERSAL (max 30 puan) [YENİ]
+        # 7️⃣ ANİ YÖN DEĞİŞİMİ - REVERSAL (max 18 puan)
+        # Reversal skorunu 30'dan 18'e normalize et (18/30 = 0.6 oranı)
         if rev_long > 0:
-            long_score += rev_long
-            long_breakdown.extend(rev_details)
+            normalized_rev_long = int(rev_long * 0.6)
+            long_score += normalized_rev_long
+            long_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*0.6)}" for d in rev_details])
         if rev_short > 0:
-            short_score += rev_short
-            short_breakdown.extend(rev_details)
+            normalized_rev_short = int(rev_short * 0.6)
+            short_score += normalized_rev_short
+            short_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*0.6)}" for d in rev_details])
         
         # Debug log for reversal detection
         if rev_long > 0 or rev_short > 0:
-            print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{rev_long} | SHORT+{rev_short} | {rev_details}")
+            print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
-        # ========== SİNYAL KARARI (%90 EŞİĞİ) ==========
-        ESIK = 90  # Minimum skor eşiği (daha seçici)
+        # ========== SİNYAL KARARI (%70 EŞİĞİ) ==========
+        ESIK = 70  # Minimum skor eşiği (100 üzerinden)
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
@@ -936,12 +1050,13 @@ async def piyasayi_tarama(exchange):
             rev_info = "🔄 Reversal: " + "+".join(rev_details) if rev_details else ""
             
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.5-REVERSAL
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.6-USDT-FLOW
 
 🪙 <b>Coin:</b> #{coin}
-📊 <b>Skor:</b> {skor_deger}/140 ({skor_breakdown})
+📊 <b>Skor:</b> {skor_deger}/100 ({skor_breakdown})
 📈 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
-🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
+🌍 <b>BTC:</b> {btc_score} {btc_ikon}
+💵 <b>USDT Akış:</b> {usdt_flow_m:+.1f}M$ {usdt_ikon}
 ⏰ <b>4H Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
 {rev_info}
 
@@ -952,7 +1067,7 @@ async def piyasayi_tarama(exchange):
 🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [7x ATR]
 🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
 
-📌 <i>%{int(skor_deger/1.4)} Güven Skoru ile Sinyal</i>
+📌 <i>%{skor_deger} Güven Skoru ile Sinyal</i>
 """
             try:
                 if resim:
@@ -1238,7 +1353,7 @@ async def main():
     exchange = ccxt.kucoin(exchange_config)
     
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.5 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim + Reversal\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif\n🔄 Ani Yön Değişimi: Aktif", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.6 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim + Reversal\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif\n🔄 Ani Yön Değişimi: Aktif\n💵 USDT Akış Analizi: Aktif", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
