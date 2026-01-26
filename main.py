@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V5.4: SCORE+VOLUME+TRAILING) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.5: SCORE+REVERSAL+TRAILING) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -105,6 +105,151 @@ def calculate_adx(df, period=14):
     df['adx'] = df['dx'].ewm(alpha=1/period).mean()
     
     return df['adx']
+
+# ==========================================
+# 🔄 BÖLÜM 1.5: ANİ YÖN DEĞİŞİMİ TESPİTİ (REVERSAL)
+# ==========================================
+def calculate_momentum_reversal(df, lookback=5, threshold=2.0):
+    """
+    Son X mumda ani momentum değişimi var mı?
+    
+    Args:
+        df: OHLCV DataFrame
+        lookback: Kaç mum geriye bakılacak
+        threshold: Yüzde değişim eşiği
+    
+    Returns:
+        reversal_type: 'REVERSAL_UP', 'REVERSAL_DOWN', veya None
+        change_pct: Yüzde değişim
+    """
+    closes = df['close'].tail(lookback)
+    
+    # Son mum ile önceki mumların ortalaması arasındaki fark
+    curr_close = closes.iloc[-1]
+    avg_prev = closes.iloc[:-1].mean()
+    change_pct = ((curr_close - avg_prev) / avg_prev) * 100
+    
+    # Eşiği geçen değişim = Ani hareket
+    if change_pct > threshold:
+        return 'REVERSAL_UP', change_pct
+    elif change_pct < -threshold:
+        return 'REVERSAL_DOWN', change_pct
+    return None, change_pct
+
+def check_rsi_divergence(df, lookback=14):
+    """
+    RSI Divergence tespit et - En güvenilir reversal sinyali
+    
+    Bullish Divergence: Fiyat düşük dip yaparken RSI yüksek dip yapar
+    Bearish Divergence: Fiyat yüksek zirve yaparken RSI düşük zirve yapar
+    
+    Returns:
+        divergence_type: 'BULLISH_DIV', 'BEARISH_DIV', veya None
+        strength: Divergence gücü (0-100)
+    """
+    price = df['close'].tail(lookback)
+    rsi = calculate_rsi(df['close']).tail(lookback)
+    
+    # Son 2 lokal minimum/maksimum bul
+    price_min_idx = price.idxmin()
+    price_max_idx = price.idxmax()
+    
+    curr_price = price.iloc[-1]
+    curr_rsi = rsi.iloc[-1]
+    
+    # Bullish Divergence: Fiyat düşüyor ama RSI yükseliyor
+    # Son 3 mumda fiyat düşerken RSI çıkıyorsa
+    price_falling = price.iloc[-1] < price.iloc[-3]
+    rsi_rising = rsi.iloc[-1] > rsi.iloc[-3]
+    
+    if price_falling and rsi_rising and curr_rsi < 40:
+        strength = min(100, abs(rsi.iloc[-1] - rsi.iloc[-3]) * 5)
+        return 'BULLISH_DIV', strength
+    
+    # Bearish Divergence: Fiyat çıkıyor ama RSI düşüyor
+    price_rising = price.iloc[-1] > price.iloc[-3]
+    rsi_falling = rsi.iloc[-1] < rsi.iloc[-3]
+    
+    if price_rising and rsi_falling and curr_rsi > 60:
+        strength = min(100, abs(rsi.iloc[-3] - rsi.iloc[-1]) * 5)
+        return 'BEARISH_DIV', strength
+    
+    return None, 0
+
+def check_volatility_spike(df, period=14, multiplier=2.0):
+    """
+    Volatilite patlaması tespit et - ATR normal seviyenin X katı üstündeyse
+    
+    Returns:
+        spike_type: 'SPIKE_UP', 'SPIKE_DOWN', veya None
+        atr_ratio: Mevcut ATR / Ortalama ATR
+    """
+    atr = calculate_atr(df, period)
+    avg_atr = atr.rolling(50).mean().iloc[-1]
+    curr_atr = atr.iloc[-1]
+    
+    if pd.isna(avg_atr) or avg_atr == 0:
+        return None, 1.0
+    
+    atr_ratio = curr_atr / avg_atr
+    
+    if atr_ratio > multiplier:
+        # Mum rengine göre yön belirle
+        is_bullish_candle = df['close'].iloc[-1] > df['open'].iloc[-1]
+        if is_bullish_candle:
+            return 'SPIKE_UP', atr_ratio
+        else:
+            return 'SPIKE_DOWN', atr_ratio
+    
+    return None, atr_ratio
+
+def calculate_reversal_score(df):
+    """
+    Tüm reversal indikatörlerini birleştirerek skor hesapla
+    
+    Returns:
+        reversal_long_score: LONG reversal skoru (0-30)
+        reversal_short_score: SHORT reversal skoru (0-30)
+        reversal_details: Detay bilgisi
+    """
+    long_score = 0
+    short_score = 0
+    details = []
+    
+    # 1. Momentum Reversal (max 10 puan)
+    mom_type, mom_pct = calculate_momentum_reversal(df, lookback=5, threshold=1.5)
+    if mom_type == 'REVERSAL_UP':
+        score = min(10, int(abs(mom_pct) * 3))
+        long_score += score
+        details.append(f"MOM↑:{score}")
+    elif mom_type == 'REVERSAL_DOWN':
+        score = min(10, int(abs(mom_pct) * 3))
+        short_score += score
+        details.append(f"MOM↓:{score}")
+    
+    # 2. RSI Divergence (max 12 puan) - En güvenilir
+    div_type, div_strength = check_rsi_divergence(df, lookback=14)
+    if div_type == 'BULLISH_DIV':
+        score = min(12, int(div_strength / 8))
+        long_score += score
+        details.append(f"DIV↑:{score}")
+    elif div_type == 'BEARISH_DIV':
+        score = min(12, int(div_strength / 8))
+        short_score += score
+        details.append(f"DIV↓:{score}")
+    
+    # 3. Volatility Spike (max 8 puan)
+    spike_type, atr_ratio = check_volatility_spike(df, period=14, multiplier=1.8)
+    if spike_type == 'SPIKE_UP':
+        score = min(8, int((atr_ratio - 1) * 5))
+        long_score += score
+        details.append(f"VOL↑:{score}")
+    elif spike_type == 'SPIKE_DOWN':
+        score = min(8, int((atr_ratio - 1) * 5))
+        short_score += score
+        details.append(f"VOL↓:{score}")
+    
+    return long_score, short_score, details
 
 # ==========================================
 # 🎨 BÖLÜM 2: GRAFİK
@@ -517,7 +662,7 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.4 SCORING+TRAILING...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.5 SCORING+REVERSAL...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -602,20 +747,24 @@ async def piyasayi_tarama(exchange):
         if pozisyon_acik_mi(coin):
             continue  # Wait until current position closes
         
-        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.4 ==========
+        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.5 (REVERSAL) ==========
         # Ağırlıklar:
         # - BTC Skoru: 30 puan (piyasa yönü - en önemli)
         # - 4H HTF Trend: 25 puan (yüksek zaman dilimi teyidi)
         # - SMA200 Trend: 20 puan (ana fiyat trendi)
-        # - RSI Seviye: 15 puan (momentum) [ARTIRILDI]
-        # - Hacim: 10 puan (coin bazlı volume) [YENİ]
-        # - ADX: 10 puan (trend gücü) [DÜŞÜRÜLDÜ]
-        # TOPLAM: ~110 puan max, %70+ = Sinyal
+        # - RSI Seviye: 15 puan (momentum)
+        # - Hacim: 10 puan (coin bazlı volume)
+        # - ADX: 10 puan (trend gücü)
+        # - 🔄 REVERSAL: 30 puan (ani yön değişimi) [YENİ]
+        # TOPLAM: ~140 puan max, %70+ = Sinyal
         
         long_score = 0
         short_score = 0
         long_breakdown = []
         short_breakdown = []
+        
+        # 🔄 REVERSAL SKORU HESAPLA (max 30 puan)
+        rev_long, rev_short, rev_details = calculate_reversal_score(df)
         
         # 1️⃣ BTC SKORU (30 puan)
         if btc_score >= 1.5:
@@ -720,8 +869,20 @@ async def piyasayi_tarama(exchange):
             long_breakdown.append("VOL:3")
             short_breakdown.append("VOL:3")
         
-        # ========== SİNYAL KARARI (%70 EŞİĞİ) ==========
-        ESIK = 70  # Minimum skor eşiği
+        # 7️⃣ ANİ YÖN DEĞİŞİMİ - REVERSAL (max 30 puan) [YENİ]
+        if rev_long > 0:
+            long_score += rev_long
+            long_breakdown.extend(rev_details)
+        if rev_short > 0:
+            short_score += rev_short
+            short_breakdown.extend(rev_details)
+        
+        # Debug log for reversal detection
+        if rev_long > 0 or rev_short > 0:
+            print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{rev_long} | SHORT+{rev_short} | {rev_details}")
+        
+        # ========== SİNYAL KARARI (%90 EŞİĞİ) ==========
+        ESIK = 90  # Minimum skor eşiği (daha seçici)
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
@@ -771,14 +932,18 @@ async def piyasayi_tarama(exchange):
             skor_deger = long_score if sinyal == "LONG" else short_score
             skor_breakdown = '+'.join(long_breakdown) if sinyal == "LONG" else '+'.join(short_breakdown)
             
+            # Reversal bilgisi
+            rev_info = "🔄 Reversal: " + "+".join(rev_details) if rev_details else ""
+            
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.3-SCORE
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.5-REVERSAL
 
 🪙 <b>Coin:</b> #{coin}
-� <b>Skor:</b> {skor_deger}/100 ({skor_breakdown})
-� <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
+📊 <b>Skor:</b> {skor_deger}/140 ({skor_breakdown})
+📈 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
 🌍 <b>BTC Skoru:</b> {btc_score} {btc_ikon}
 ⏰ <b>4H Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
+{rev_info}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
@@ -787,7 +952,7 @@ async def piyasayi_tarama(exchange):
 🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [7x ATR]
 🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
 
-📌 <i>%{skor_deger} Güven Skoru ile Sinyal</i>
+📌 <i>%{int(skor_deger/1.4)} Güven Skoru ile Sinyal</i>
 """
             try:
                 if resim:
@@ -1018,7 +1183,6 @@ async def pozisyonlari_yokla(exchange):
             
             # --- STOP LOSS CHECK ---
             sl_hit = (fiyat <= sl) if yon == "LONG" else (fiyat >= sl)
-            print(f"   SL Check: {yon} | Fiyat={fiyat} | SL={sl} | sl_hit={sl_hit}")
             if sl_hit:
                 # Calculate actual PnL based on which TPs were hit
                 partial_profit = 0.0
@@ -1074,7 +1238,7 @@ async def main():
     exchange = ccxt.kucoin(exchange_config)
     
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.4 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.5 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim + Reversal\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif\n🔄 Ani Yön Değişimi: Aktif", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
