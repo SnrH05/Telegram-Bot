@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V5.7: SCORE+REVERSAL+CVD-FLOW) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.8: SCORE+REVERSAL+CVD+RANGE) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -250,6 +250,231 @@ def calculate_reversal_score(df):
         details.append(f"VOL↓:{score}")
     
     return long_score, short_score, details
+
+# ==========================================
+# 📊 BÖLÜM 1.55: RANGE TRADING MODU (DÜZ PİYASA)
+# ==========================================
+def calculate_bollinger(df, period=20, std_dev=2):
+    """
+    Bollinger Bantları hesapla
+    
+    Returns:
+        lower_band, middle_band (SMA), upper_band
+    """
+    sma = df['close'].rolling(period).mean()
+    std = df['close'].rolling(period).std()
+    upper = sma + (std * std_dev)
+    lower = sma - (std * std_dev)
+    return lower, sma, upper
+
+def is_ranging_market(df, adx_threshold=20):
+    """
+    Düz piyasa tespiti
+    
+    Kriterler:
+    - ADX < threshold (trend yok)
+    - ATR ortalamanın altında (düşük volatilite)
+    - Bollinger bantları daralmış
+    
+    Returns:
+        is_ranging (bool), range_details (dict)
+    """
+    # Tek seferde hesapla (optimizasyon)
+    adx = calculate_adx(df).iloc[-1]
+    atr_series = calculate_atr(df)
+    atr = atr_series.iloc[-1]
+    atr_sma = atr_series.rolling(50).mean().iloc[-1]
+    
+    # NaN kontrolü
+    if pd.isna(adx) or pd.isna(atr):
+        return False, {'adx': 0, 'atr_ratio': 1, 'bb_width': 0, 'criteria_met': 0}
+    
+    # Bollinger genişliği
+    lower, mid, upper = calculate_bollinger(df)
+    bb_width = ((upper.iloc[-1] - lower.iloc[-1]) / mid.iloc[-1]) * 100 if mid.iloc[-1] > 0 else 0
+    bb_width_avg = ((upper - lower) / mid * 100).rolling(50).mean().iloc[-1]
+    
+    # Düz piyasa kriterleri
+    is_low_adx = adx < adx_threshold
+    is_low_volatility = atr < atr_sma * 0.9 if not pd.isna(atr_sma) and atr_sma > 0 else False
+    is_bb_tight = bb_width < bb_width_avg * 0.9 if not pd.isna(bb_width_avg) and bb_width_avg > 0 else False
+    
+    # En az 2 kriter sağlanmalı
+    criteria_met = sum([is_low_adx, is_low_volatility, is_bb_tight])
+    is_ranging = criteria_met >= 2
+    
+    details = {
+        'adx': adx,
+        'atr_ratio': atr / atr_sma if atr_sma and atr_sma > 0 else 1,
+        'bb_width': bb_width,
+        'is_low_adx': is_low_adx,
+        'is_low_volatility': is_low_volatility,
+        'is_bb_tight': is_bb_tight,
+        'criteria_met': criteria_met
+    }
+    
+    return is_ranging, details
+
+def calculate_range_score(df):
+    """
+    Range Trading için sinyal skoru (0-60 üzerinden)
+    
+    Puanlama:
+    - Bollinger Alt/Üst Bant: 20 puan
+    - RSI Oversold/Overbought: 15 puan
+    - SMA20'den Sapma: 12 puan
+    - Wick Rejection: 8 puan
+    - Stochastic: 5 puan
+    
+    Eşik: 35/60 = Range Sinyal
+    
+    Returns:
+        long_score, short_score, breakdown, tp_sl_info
+    """
+    long_score = 0
+    short_score = 0
+    long_breakdown = []
+    short_breakdown = []
+    
+    price = df['close'].iloc[-1]
+    
+    # 1. Bollinger Bant Pozisyonu (max 20 puan)
+    lower, mid, upper = calculate_bollinger(df)
+    bb_lower = lower.iloc[-1]
+    bb_mid = mid.iloc[-1]
+    bb_upper = upper.iloc[-1]
+    
+    if bb_upper != bb_lower:
+        bb_position = (price - bb_lower) / (bb_upper - bb_lower)
+    else:
+        bb_position = 0.5
+    
+    if bb_position < 0.15:  # Alt banda çok yakın
+        long_score += 20
+        long_breakdown.append("BB:20")
+    elif bb_position < 0.25:  # Alt banda yakın
+        long_score += 15
+        long_breakdown.append("BB:15")
+    elif bb_position < 0.35:
+        long_score += 8
+        long_breakdown.append("BB:8")
+    
+    if bb_position > 0.85:  # Üst banda çok yakın
+        short_score += 20
+        short_breakdown.append("BB:20")
+    elif bb_position > 0.75:  # Üst banda yakın
+        short_score += 15
+        short_breakdown.append("BB:15")
+    elif bb_position > 0.65:
+        short_score += 8
+        short_breakdown.append("BB:8")
+    
+    # 2. RSI (max 15 puan)
+    rsi = calculate_rsi(df['close']).iloc[-1]
+    
+    if rsi < 30:
+        long_score += 15
+        long_breakdown.append("RSI:15")
+    elif rsi < 35:
+        long_score += 12
+        long_breakdown.append("RSI:12")
+    elif rsi < 40:
+        long_score += 8
+        long_breakdown.append("RSI:8")
+    
+    if rsi > 70:
+        short_score += 15
+        short_breakdown.append("RSI:15")
+    elif rsi > 65:
+        short_score += 12
+        short_breakdown.append("RSI:12")
+    elif rsi > 60:
+        short_score += 8
+        short_breakdown.append("RSI:8")
+    
+    # 3. SMA20'den Sapma (max 12 puan)
+    sma20 = df['close'].rolling(20).mean().iloc[-1]
+    deviation_pct = ((price - sma20) / sma20) * 100 if sma20 and sma20 > 0 else 0
+    
+    if deviation_pct < -2.0:
+        long_score += 12
+        long_breakdown.append("DEV:12")
+    elif deviation_pct < -1.5:
+        long_score += 8
+        long_breakdown.append("DEV:8")
+    elif deviation_pct < -1.0:
+        long_score += 5
+        long_breakdown.append("DEV:5")
+    
+    if deviation_pct > 2.0:
+        short_score += 12
+        short_breakdown.append("DEV:12")
+    elif deviation_pct > 1.5:
+        short_score += 8
+        short_breakdown.append("DEV:8")
+    elif deviation_pct > 1.0:
+        short_score += 5
+        short_breakdown.append("DEV:5")
+    
+    # 4. Wick Rejection (max 8 puan) - Son mumda fitil reddi
+    row = df.iloc[-1]
+    body = abs(row['close'] - row['open'])
+    upper_wick = row['high'] - max(row['close'], row['open'])
+    lower_wick = min(row['close'], row['open']) - row['low']
+    
+    if body > 0:
+        lower_ratio = lower_wick / body
+        upper_ratio = upper_wick / body
+        
+        if lower_ratio > 2.0:  # Uzun alt fitil = alıcı baskısı
+            long_score += 8
+            long_breakdown.append("WICK:8")
+        elif lower_ratio > 1.5:
+            long_score += 5
+            long_breakdown.append("WICK:5")
+        
+        if upper_ratio > 2.0:  # Uzun üst fitil = satıcı baskısı
+            short_score += 8
+            short_breakdown.append("WICK:8")
+        elif upper_ratio > 1.5:
+            short_score += 5
+            short_breakdown.append("WICK:5")
+    
+    # 5. Stochastic benzeri kontrol (max 5 puan)
+    # Son 14 mumun en düşük ve en yükseğine göre pozisyon
+    low_14 = df['low'].tail(14).min()
+    high_14 = df['high'].tail(14).max()
+    
+    if high_14 != low_14:
+        stoch_k = ((price - low_14) / (high_14 - low_14)) * 100
+    else:
+        stoch_k = 50
+    
+    if stoch_k < 20:
+        long_score += 5
+        long_breakdown.append("STOCH:5")
+    elif stoch_k < 30:
+        long_score += 3
+        long_breakdown.append("STOCH:3")
+    
+    if stoch_k > 80:
+        short_score += 5
+        short_breakdown.append("STOCH:5")
+    elif stoch_k > 70:
+        short_score += 3
+        short_breakdown.append("STOCH:3")
+    
+    # TP/SL için range bilgisi
+    atr = calculate_atr(df).iloc[-1]
+    tp_sl_info = {
+        'bb_mid': bb_mid,
+        'bb_lower': bb_lower,
+        'bb_upper': bb_upper,
+        'atr': atr,
+        'bb_position': bb_position
+    }
+    
+    return long_score, short_score, long_breakdown, short_breakdown, tp_sl_info
 
 # ==========================================
 # ⚡ BÖLÜM 1.6: RAPID REVERSAL STRATEJİSİ
@@ -1210,7 +1435,7 @@ async def piyasayi_tarama(exchange):
             print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
         # ========== SİNYAL KARARI (%60 EŞİĞİ) ==========
-        ESIK = 50  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
+        ESIK = 60  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
         YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor
         
         # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
@@ -1282,19 +1507,17 @@ async def piyasayi_tarama(exchange):
 {ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.7-CVD
 
 🪙 <b>Coin:</b> #{coin}
-📊 <b>Skor:</b> {skor_deger}/100 ({skor_breakdown})
-📈 <b>RSI:</b> {rsi_val:.1f} | <b>ADX:</b> {adx_val:.1f} | <b>ATR:</b> {atr_pct:.2f}%
 🌍 <b>BTC:</b> {btc_score} {btc_ikon}
 💵 <b>USDT Akış:</b> {usdt_flow_m:+.1f}M$ {usdt_ikon}
-⏰ <b>4H Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
+⏰ <b>Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
 {rev_info}
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) [2.5x ATR]
-🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) [4.5x ATR]
-🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} (+{tp3_pct:.1f}%) [7x ATR]
-🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [2x ATR]
+🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} 
+🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} 
+🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} 
+🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} 
 
 📌 <i>%{skor_deger} Güven Skoru ile Sinyal</i>
 """
@@ -1305,6 +1528,95 @@ async def piyasayi_tarama(exchange):
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
                 print(f"Telegram Hatasi: {e}")
+        
+        # ========== 📊 RANGE TRADING MODU (DÜZ PİYASA) ==========
+        # Trend sinyali yoksa ve piyasa düzse Range modunu dene
+        if not sinyal:
+            is_range, range_details = is_ranging_market(df, adx_threshold=20)
+            
+            if is_range:
+                # Range skorunu hesapla
+                range_long, range_short, range_long_bd, range_short_bd, tp_sl_info = calculate_range_score(df)
+                
+                RANGE_ESIK = 35  # Range için daha düşük eşik (60/60 yerine 35/60)
+                
+                # Range sınyal kararı
+                range_sinyal = None
+                if range_long >= RANGE_ESIK and range_long > range_short:
+                    range_sinyal = "LONG"
+                    range_skor = range_long
+                    range_breakdown = range_long_bd
+                elif range_short >= RANGE_ESIK and range_short > range_long:
+                    range_sinyal = "SHORT"
+                    range_skor = range_short
+                    range_breakdown = range_short_bd
+                
+                # Range loglama (eşiğe yakın olanlar)
+                range_max = max(range_long, range_short)
+                if range_max >= RANGE_ESIK:
+                    range_dir = "LONG" if range_long >= range_short else "SHORT"
+                    range_bd = range_long_bd if range_long >= range_short else range_short_bd
+                    print(f"📊 RANGE SİNYAL! {coin}: {range_dir} {range_max}/60 ({'+'.join(range_bd)}) [ADX:{range_details['adx']:.1f}]")
+                elif range_max >= 25:
+                    range_dir = "LONG" if range_long >= range_short else "SHORT"
+                    eksik = RANGE_ESIK - range_max
+                    print(f"⏳ RANGE YAKIN: {coin} {range_dir} {range_max}/60 (Eksik: {eksik}p)")
+                
+                if range_sinyal:
+                    # ========== RANGE TP/SL HESAPLAMA (DAHA SIKI) ==========
+                    bb_mid = tp_sl_info['bb_mid']
+                    bb_lower = tp_sl_info['bb_lower']
+                    bb_upper = tp_sl_info['bb_upper']
+                    atr = tp_sl_info['atr']
+                    
+                    if range_sinyal == "LONG":
+                        # LONG: TP = Bollinger orta/üst banda, SL = Alt bandın altı
+                        tp1_price = bb_mid
+                        tp2_price = bb_upper * 0.98  # Üst bandın %2 altı (güvenli)
+                        sl_price = bb_lower - (atr * 0.5)  # Alt band - 0.5 ATR
+                    else:  # SHORT
+                        # SHORT: TP = Bollinger orta/alt banda, SL = Üst bandın üstü
+                        tp1_price = bb_mid
+                        tp2_price = bb_lower * 1.02  # Alt bandın %2 üstü (güvenli)
+                        sl_price = bb_upper + (atr * 0.5)  # Üst band + 0.5 ATR
+                    
+                    # Yüzdeler
+                    tp1_pct = abs(tp1_price - price) / price * 100
+                    tp2_pct = abs(tp2_price - price) / price * 100
+                    sl_pct = abs(sl_price - price) / price * 100
+                    
+                    p_fmt = ".8f" if price < 0.01 else ".4f"
+                    
+                    # Kaydet (TP3 = TP2, çünkü range'de sadece 2 TP var)
+                    islem_kaydet(coin, range_sinyal, price, tp1_price, tp2_price, tp2_price, sl_price)
+                    SON_SINYAL_ZAMANI[coin] = datetime.now()
+                    
+                    print(f"📊 RANGE {range_sinyal}: {coin} (Score: {range_skor}/60, ADX: {range_details['adx']:.1f})")
+                    
+                    # Grafik oluştur
+                    resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, f"RANGE {range_sinyal}")
+                    ikon = "🟢" if range_sinyal == "LONG" else "🔴"
+                    
+                    mesaj = f"""
+📊 <b>RANGE TRADING SİNYAL ({range_sinyal})</b> #V5.8-RANGE
+
+🪙 <b>Coin:</b> #{coin}
+
+💰 <b>Giriş:</b> ${price:{p_fmt}}
+
+🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} 
+🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} 
+🛑 <b>SL:</b> ${sl_price:{p_fmt}} 
+
+
+"""
+                    try:
+                        if resim:
+                            await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
+                        else:
+                            await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    except Exception as e:
+                        print(f"Telegram Hatasi (Range): {e}")
 
 # ==========================================
 # ⚡ BÖLÜM 5.5: RAPID REVERSAL TARAMA
@@ -1407,9 +1719,9 @@ async def rapid_strateji_tarama(exchange):
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.1f}%) [2x ATR]
-🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.1f}%) [3x ATR]
-🛑 <b>SL:</b> ${sl_price:{p_fmt}} (-{sl_pct:.1f}%) [1.5x ATR]
+🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} 
+🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} 
+🛑 <b>SL:</b> ${sl_price:{p_fmt}} 
 
 ⚠️ <i>RAPID sinyal - Hızlı hareket bekleniyor!</i>
 """
@@ -1490,15 +1802,11 @@ async def pozisyonlari_yokla(exchange):
 🎯 <b>TP1:</b> ${tp1:{p_fmt}}
 📈 <b>Kâr:</b> +{pnl1:.2f}%
 
-{trend_ikon} <b>Trend Gücü:</b> {trend_gucu} ({trend_puan}/100)
-   ├─ RSI: {'✅' if analiz.get('rsi_ok') else '❌'}
-   ├─ SMA20: {'✅' if analiz.get('sma20_ok') else '❌'}
-   ├─ ADX: {'✅' if analiz.get('adx_ok') else '❌'}
-   └─ Hacim: {'✅' if analiz.get('vol_ok') else '❌'}
+
 
 {gideni_tutma}
 🔒 <b>YENİ SL:</b> ${new_sl:{p_fmt}} ({sl_tipi})
-📌 <i>%33 Kapatıldı - Kalan %67 Devam!</i>
+
 """
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                     continue  # Check other TPs next cycle
