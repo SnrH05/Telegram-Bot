@@ -1209,8 +1209,8 @@ async def piyasayi_tarama(exchange):
         if rev_long > 0 or rev_short > 0:
             print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
-        # ========== SİNYAL KARARI (%70 EŞİĞİ) ==========
-        ESIK = 70  # Minimum skor eşiği (100 üzerinden)
+        # ========== SİNYAL KARARI (%60 EŞİĞİ) ==========
+        ESIK = 60  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
@@ -1326,7 +1326,10 @@ async def rapid_strateji_tarama(exchange):
         df['date'] = pd.to_datetime(df['date'], unit='ms')
         df.set_index('date', inplace=True)
         
-        # ATR hesapla
+        # İndikatörleri hesapla (grafik için gerekli)
+        df['sma50'] = calculate_sma(df['close'], 50)
+        df['sma200'] = calculate_sma(df['close'], 50)  # 50 kullan (50 mum var sadece)
+        df['rsi'] = calculate_rsi(df['close'])
         df['atr'] = calculate_atr(df)
         atr_val = df['atr'].iloc[-1]
         price = df['close'].iloc[-1]
@@ -1373,12 +1376,15 @@ async def rapid_strateji_tarama(exchange):
             
             print(f"⚡ RAPID {sinyal}: {coin} (Score: {skor}/100, Tetik: {', '.join(tetikleyiciler)})")
             
+            # 🎨 GRAFİK OLUŞTUR (YENİ!)
+            resim = await grafik_olustur_async(coin, df.tail(50), tp1_price, sl_price, f"RAPID {sinyal}")
+            
             ikon = "🟢" if sinyal == "LONG" else "🔴"
             detail_str = '+'.join(rapid_details)
             tetik_str = ' + '.join(tetikleyiciler) if tetikleyiciler else "Multi-trigger"
             
             mesaj = f"""
-⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V5.6-RAPID
+⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V5.7-RAPID
 
 🪙 <b>Coin:</b> #{coin}
 🔥 <b>Rapid Skor:</b> {skor}/100 ({detail_str})
@@ -1393,7 +1399,10 @@ async def rapid_strateji_tarama(exchange):
 ⚠️ <i>RAPID sinyal - Hızlı hareket bekleniyor!</i>
 """
             try:
-                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                if resim:
+                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
+                else:
+                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
                 print(f"Telegram Hatasi (Rapid): {e}")
 
