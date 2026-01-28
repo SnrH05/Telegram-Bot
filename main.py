@@ -1211,6 +1211,21 @@ async def piyasayi_tarama(exchange):
         
         # ========== SİNYAL KARARI (%60 EŞİĞİ) ==========
         ESIK = 60  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
+        YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor
+        
+        # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
+        max_score = max(long_score, short_score)
+        best_direction = "LONG" if long_score >= short_score else "SHORT"
+        best_breakdown = long_breakdown if long_score >= short_score else short_breakdown
+        
+        if max_score >= ESIK:
+            # Sinyal üretilecek - detaylı log
+            sinyal_ikon = "🟢" if best_direction == "LONG" else "🔴"
+            print(f"{sinyal_ikon} SİNYAL! {coin}: {best_direction} {max_score}/100 ({'+'.join(best_breakdown)})")
+        elif max_score >= YAKIN_ESIK:
+            # Eşiğe yakın - uyarı log
+            eksik = ESIK - max_score
+            print(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
