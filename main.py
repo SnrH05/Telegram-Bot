@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V5.7: SCORE+REVERSAL+CVD-FLOW) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.6: SCORE+REVERSAL+USDT-FLOW) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -807,25 +807,25 @@ async def trend_gucunu_analiz_et(exchange, coin, yon, mevcut_fiyat):
 
 async def usdt_hacim_akisi_analiz(exchange):
     """
-    USDT Hacim Akışı Analizi (CVD - Cumulative Volume Delta)
+    USDT Hacim Akışı Analizi - Piyasa yönünü belirle
     
-    CVD Mantığı:
-    - Her mum için delta = (close - open) / (high - low) * volume * price
-    - Bu oran mum içindeki gerçek alış/satış oranını yaklaşık gösterir
-    - Toplam CVD pozitifse -> Net alış baskısı (BULLISH)
-    - Toplam CVD negatifse -> Net satış baskısı (BEARISH)
+    Mantık:
+    - Birden fazla majör coinin USDT hacmini analiz et
+    - Alış hacmi (yeşil mum) vs Satış hacmi (kırmızı mum) karşılaştır
+    - Net akış pozitifse -> Piyasaya para GİRİYOR (BULLISH)
+    - Net akış negatifse -> Piyasadan para ÇIKIYOR (BEARISH)
     
     Returns:
         usdt_score: -1.0 ile +1.0 arası puan
-        cvd_millions: Net CVD (milyon $ cinsinden)
+        usdt_flow: Net USDT akışı (milyon $)
         flow_direction: 'INFLOW', 'OUTFLOW', 'NEUTRAL'
     """
     try:
         # Majör coinler - yüksek hacimli
         major_pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT"]
         
-        total_cvd = 0.0
-        total_volume_usd = 0.0
+        total_buy_volume = 0.0
+        total_sell_volume = 0.0
         
         for pair in major_pairs:
             try:
@@ -837,61 +837,49 @@ async def usdt_hacim_akisi_analiz(exchange):
                 
                 for i in range(len(df)):
                     row = df.iloc[i]
-                    
-                    # Mum aralığı
-                    candle_range = row['high'] - row['low']
-                    
-                    # USDT cinsinden hacim
+                    # USDT cinsinden hacim = volume * close price
                     usdt_vol = row['volume'] * row['close']
-                    total_volume_usd += usdt_vol
                     
-                    if candle_range > 0:
-                        # CVD Delta = Mum içindeki alış-satış oranı
-                        # (close - open) / range = -1 ile +1 arası değer
-                        # +1 = Tam alış hakimiyeti (close = high)
-                        # -1 = Tam satış hakimiyeti (close = low)
-                        delta_ratio = (row['close'] - row['open']) / candle_range
-                        
-                        # Ağırlıklı CVD: Delta oranı × USDT hacmi
-                        weighted_cvd = delta_ratio * usdt_vol
-                        total_cvd += weighted_cvd
+                    # Yeşil mum = Alış baskısı
+                    if row['close'] > row['open']:
+                        total_buy_volume += usdt_vol
+                    # Kırmızı mum = Satış baskısı
                     else:
-                        # Doji durumu - mum açılış/kapanışa göre karar ver
-                        if row['close'] > row['open']:
-                            total_cvd += usdt_vol * 0.5  # Hafif alış
-                        elif row['close'] < row['open']:
-                            total_cvd -= usdt_vol * 0.5  # Hafif satış
+                        total_sell_volume += usdt_vol
                         
             except Exception as e:
                 continue
         
-        if total_volume_usd == 0:
+        # Net akış hesapla
+        net_flow = total_buy_volume - total_sell_volume
+        total_volume = total_buy_volume + total_sell_volume
+        
+        if total_volume == 0:
             return 0.0, 0.0, 'NEUTRAL'
         
-        # CVD oranı hesapla (-1 ile +1 arası)
-        cvd_ratio = total_cvd / total_volume_usd
+        # Akış oranı (-1 ile +1 arası normalize et)
+        flow_ratio = net_flow / total_volume
         
-        # Skor hesapla (max ±1.0) - 3x amplify (CVD daha hassas)
-        usdt_score = max(-1.0, min(1.0, cvd_ratio * 3))
+        # Skor hesapla (max ±1.0)
+        usdt_score = max(-1.0, min(1.0, flow_ratio * 5))  # 5x amplify
         
         # Yön belirle
-        if cvd_ratio > 0.03:  # %3+ net alış baskısı
+        if flow_ratio > 0.05:  # %5+ net alış
             flow_direction = 'INFLOW'
-        elif cvd_ratio < -0.03:  # %3+ net satış baskısı
+        elif flow_ratio < -0.05:  # %5+ net satış
             flow_direction = 'OUTFLOW'
         else:
             flow_direction = 'NEUTRAL'
         
-        # Milyon $ cinsinden CVD
-        cvd_millions = total_cvd / 1_000_000
+        # Milyon $ cinsinden net akış
+        net_flow_millions = net_flow / 1_000_000
         
-        # Detaylı log
-        print(f"� CVD AKIŞ: TotalVol=${total_volume_usd/1e9:.2f}B | CVD={cvd_millions:+.1f}M$ | Ratio={cvd_ratio*100:+.2f}% | {flow_direction}")
+        print(f"💵 USDT AKIŞ: Buy=${total_buy_volume/1e9:.2f}B | Sell=${total_sell_volume/1e9:.2f}B | Net={net_flow_millions:+.1f}M | {flow_direction}")
         
-        return usdt_score, cvd_millions, flow_direction
+        return usdt_score, net_flow_millions, flow_direction
         
     except Exception as e:
-        print(f"⚠️ CVD Hacim Analiz Hatası: {e}")
+        print(f"⚠️ USDT Hacim Analiz Hatası: {e}")
         return 0.0, 0.0, 'NEUTRAL'
 
 async def btc_piyasa_puani_hesapla(exchange):
@@ -953,7 +941,7 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.7 SCORING+REVERSAL+CVD...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.6 SCORING+REVERSAL+USDT-FLOW...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -1209,23 +1197,8 @@ async def piyasayi_tarama(exchange):
         if rev_long > 0 or rev_short > 0:
             print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
-        # ========== SİNYAL KARARI (%60 EŞİĞİ) ==========
-        ESIK = 60  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
-        YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor
-        
-        # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
-        max_score = max(long_score, short_score)
-        best_direction = "LONG" if long_score >= short_score else "SHORT"
-        best_breakdown = long_breakdown if long_score >= short_score else short_breakdown
-        
-        if max_score >= ESIK:
-            # Sinyal üretilecek - detaylı log
-            sinyal_ikon = "🟢" if best_direction == "LONG" else "🔴"
-            print(f"{sinyal_ikon} SİNYAL! {coin}: {best_direction} {max_score}/100 ({'+'.join(best_breakdown)})")
-        elif max_score >= YAKIN_ESIK:
-            # Eşiğe yakın - uyarı log
-            eksik = ESIK - max_score
-            print(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
+        # ========== SİNYAL KARARI (%70 EŞİĞİ) ==========
+        ESIK = 70  # Minimum skor eşiği (100 üzerinden)
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
@@ -1279,7 +1252,7 @@ async def piyasayi_tarama(exchange):
             rev_info = "🔄 Reversal: " + "+".join(rev_details) if rev_details else ""
             
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.7-CVD
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.6-USDT-FLOW
 
 🪙 <b>Coin:</b> #{coin}
 📊 <b>Skor:</b> {skor_deger}/100 ({skor_breakdown})
@@ -1341,10 +1314,7 @@ async def rapid_strateji_tarama(exchange):
         df['date'] = pd.to_datetime(df['date'], unit='ms')
         df.set_index('date', inplace=True)
         
-        # İndikatörleri hesapla (grafik için gerekli)
-        df['sma50'] = calculate_sma(df['close'], 50)
-        df['sma200'] = calculate_sma(df['close'], 50)  # 50 kullan (50 mum var sadece)
-        df['rsi'] = calculate_rsi(df['close'])
+        # ATR hesapla
         df['atr'] = calculate_atr(df)
         atr_val = df['atr'].iloc[-1]
         price = df['close'].iloc[-1]
@@ -1391,15 +1361,12 @@ async def rapid_strateji_tarama(exchange):
             
             print(f"⚡ RAPID {sinyal}: {coin} (Score: {skor}/100, Tetik: {', '.join(tetikleyiciler)})")
             
-            # 🎨 GRAFİK OLUŞTUR (YENİ!)
-            resim = await grafik_olustur_async(coin, df.tail(50), tp1_price, sl_price, f"RAPID {sinyal}")
-            
             ikon = "🟢" if sinyal == "LONG" else "🔴"
             detail_str = '+'.join(rapid_details)
             tetik_str = ' + '.join(tetikleyiciler) if tetikleyiciler else "Multi-trigger"
             
             mesaj = f"""
-⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V5.7-RAPID
+⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V5.6-RAPID
 
 🪙 <b>Coin:</b> #{coin}
 🔥 <b>Rapid Skor:</b> {skor}/100 ({detail_str})
@@ -1414,10 +1381,7 @@ async def rapid_strateji_tarama(exchange):
 ⚠️ <i>RAPID sinyal - Hızlı hareket bekleniyor!</i>
 """
             try:
-                if resim:
-                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
-                else:
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
                 print(f"Telegram Hatasi (Rapid): {e}")
 
