@@ -1435,7 +1435,7 @@ async def piyasayi_tarama(exchange):
             print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
         # ========== SİNYAL KARARI (%60 EŞİĞİ) ==========
-        ESIK = 60  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
+        ESIK = 70  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
         YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor
         
         # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
