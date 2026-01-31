@@ -15,7 +15,7 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
-print("⚙️ TITANIUM PREMIUM BOT (V5.8: SCORE+REVERSAL+CVD+RANGE) BAŞLATILIYOR...")
+print("⚙️ TITANIUM PREMIUM BOT (V5.9: SINYAL OPTİMİZASYON) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -56,6 +56,13 @@ RSS_LIST = [
 
 SON_SINYAL_ZAMANI = {}
 SON_RAPOR_TARIHI = None 
+
+# ==========================================
+# 🎯 SİNYAL OPTİMİZASYONU AYARLARI (V5.9)
+# ==========================================
+COIN_COOLDOWN_SAAT = 4      # Aynı coin için minimum bekleme süresi (saat)
+GUNLUK_SINYAL_LIMIT = 999   # Günlük limit KALDIRILDI (eski: 8)
+BUGUNUN_SINYALLERI = []     # Bugün üretilen sinyallerin listesi
 
 # ==========================================
 # 🧮 BÖLÜM 1: İNDİKATÖRLER
@@ -1178,7 +1185,7 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.7 SCORING+REVERSAL+CVD...")
+    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.9 OPTİMİZE TARAMA (Eşik:75)...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -1276,7 +1283,19 @@ async def piyasayi_tarama(exchange):
         if pozisyon_acik_mi(coin):
             continue  # Wait until current position closes
         
-        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.6 (100 ÜZERİNDEN) ==========
+        # 🕐 V5.9 COOLDOWN: Son sinyalden bu yana COIN_COOLDOWN_SAAT saat geçmeli
+        if coin in SON_SINYAL_ZAMANI:
+            gecen_sure = (datetime.now() - SON_SINYAL_ZAMANI[coin]).total_seconds() / 3600
+            if gecen_sure < COIN_COOLDOWN_SAAT:
+                continue  # Bu coin için henüz yeterli süre geçmedi
+        
+        # 📊 V5.9 GÜNLÜK LİMİT: Maksimum GUNLUK_SINYAL_LIMIT sinyal/gün
+        bugun_str = datetime.now().strftime("%Y-%m-%d")
+        bugunun_sinyal_sayisi = len([s for s in BUGUNUN_SINYALLERI if s[0] == bugun_str])
+        if bugunun_sinyal_sayisi >= GUNLUK_SINYAL_LIMIT:
+            continue  # Günlük limite ulaşıldı
+        
+        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.9 (100 ÜZERİNDEN) ==========
         # Ağırlıklar (Toplam: 100 puan):
         # - BTC Skoru: 20 puan (piyasa yönü - en önemli)
         # - � REVERSAL: 18 puan (ani yön değişimi)
@@ -1371,7 +1390,8 @@ async def piyasayi_tarama(exchange):
             long_breakdown.append("ADX:3")
             short_breakdown.append("ADX:3")
         
-        # 5️⃣ RSI SEVİYE (max 10 puan)
+        # 5️⃣ RSI SEVİYE (max 10 puan) - V5.9: GEVŞETİLMİŞ
+        # LONG için oversold: 30, 35, 40, 45
         if rsi_val < 30:
             long_score += 10
             long_breakdown.append("RSI:10")
@@ -1384,7 +1404,8 @@ async def piyasayi_tarama(exchange):
         elif rsi_val < 45:
             long_score += 3
             long_breakdown.append("RSI:3")
-            
+        
+        # SHORT için overbought: 70, 65, 60, 55
         if rsi_val > 70:
             short_score += 10
             short_breakdown.append("RSI:10")
@@ -1434,9 +1455,9 @@ async def piyasayi_tarama(exchange):
         if rev_long > 0 or rev_short > 0:
             print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
-        # ========== SİNYAL KARARI (%60 EŞİĞİ) ==========
-        ESIK = 70  # Minimum skor eşiği (100 üzerinden) - 70'den düşürüldü
-        YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor
+        # ========== SİNYAL KARARI (%75 EŞİĞİ - V5.9 OPTİMİZE) ==========
+        ESIK = 75  # YÜKSEK KALİTE: Günlük 5-6 sinyal hedefi için artırıldı
+        YAKIN_ESIK = 55  # "Yakın" sayılacak minimum skor (artırıldı)
         
         # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
         max_score = max(long_score, short_score)
@@ -1461,6 +1482,12 @@ async def piyasayi_tarama(exchange):
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
+            # V5.9: ATR yüzdesi %0.80'den düşükse sinyal verme (düşük volatilite)
+            atr_pct = (atr_val / price) * 100
+            if atr_pct < 0.80:
+                print(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
+                continue  # Volatilite yetersiz, sinyal verme
+            
             # ATR Multipliers: SL=2x, TP1=2.5x, TP2=4.5x, TP3=7x (YÜKSEK KÂR)
             atr_sl = atr_val * 2.0    # Stop Loss: 2x ATR
             atr_tp1 = atr_val * 2.5   # TP1: 2.5x ATR (artırıldı)
@@ -1490,6 +1517,9 @@ async def piyasayi_tarama(exchange):
             # Save with all TP levels
             islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp3_price, sl_price)
             SON_SINYAL_ZAMANI[coin] = datetime.now()
+            
+            # V5.9: Günlük sinyal listesine ekle
+            BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, sinyal))
             
             print(f"🎯 {sinyal}: {coin} (Score: {long_score if sinyal == 'LONG' else short_score}/100, ATR: {atr_pct:.2f}%)")
             
@@ -1529,94 +1559,7 @@ async def piyasayi_tarama(exchange):
             except Exception as e:
                 print(f"Telegram Hatasi: {e}")
         
-        # ========== 📊 RANGE TRADING MODU (DÜZ PİYASA) ==========
-        # Trend sinyali yoksa ve piyasa düzse Range modunu dene
-        if not sinyal:
-            is_range, range_details = is_ranging_market(df, adx_threshold=20)
-            
-            if is_range:
-                # Range skorunu hesapla
-                range_long, range_short, range_long_bd, range_short_bd, tp_sl_info = calculate_range_score(df)
-                
-                RANGE_ESIK = 35  # Range için daha düşük eşik (60/60 yerine 35/60)
-                
-                # Range sınyal kararı
-                range_sinyal = None
-                if range_long >= RANGE_ESIK and range_long > range_short:
-                    range_sinyal = "LONG"
-                    range_skor = range_long
-                    range_breakdown = range_long_bd
-                elif range_short >= RANGE_ESIK and range_short > range_long:
-                    range_sinyal = "SHORT"
-                    range_skor = range_short
-                    range_breakdown = range_short_bd
-                
-                # Range loglama (eşiğe yakın olanlar)
-                range_max = max(range_long, range_short)
-                if range_max >= RANGE_ESIK:
-                    range_dir = "LONG" if range_long >= range_short else "SHORT"
-                    range_bd = range_long_bd if range_long >= range_short else range_short_bd
-                    print(f"📊 RANGE SİNYAL! {coin}: {range_dir} {range_max}/60 ({'+'.join(range_bd)}) [ADX:{range_details['adx']:.1f}]")
-                elif range_max >= 25:
-                    range_dir = "LONG" if range_long >= range_short else "SHORT"
-                    eksik = RANGE_ESIK - range_max
-                    print(f"⏳ RANGE YAKIN: {coin} {range_dir} {range_max}/60 (Eksik: {eksik}p)")
-                
-                if range_sinyal:
-                    # ========== RANGE TP/SL HESAPLAMA (DAHA SIKI) ==========
-                    bb_mid = tp_sl_info['bb_mid']
-                    bb_lower = tp_sl_info['bb_lower']
-                    bb_upper = tp_sl_info['bb_upper']
-                    atr = tp_sl_info['atr']
-                    
-                    if range_sinyal == "LONG":
-                        # LONG: TP = Bollinger orta/üst banda, SL = Alt bandın altı
-                        tp1_price = bb_mid
-                        tp2_price = bb_upper * 0.98  # Üst bandın %2 altı (güvenli)
-                        sl_price = bb_lower - (atr * 0.5)  # Alt band - 0.5 ATR
-                    else:  # SHORT
-                        # SHORT: TP = Bollinger orta/alt banda, SL = Üst bandın üstü
-                        tp1_price = bb_mid
-                        tp2_price = bb_lower * 1.02  # Alt bandın %2 üstü (güvenli)
-                        sl_price = bb_upper + (atr * 0.5)  # Üst band + 0.5 ATR
-                    
-                    # Yüzdeler
-                    tp1_pct = abs(tp1_price - price) / price * 100
-                    tp2_pct = abs(tp2_price - price) / price * 100
-                    sl_pct = abs(sl_price - price) / price * 100
-                    
-                    p_fmt = ".8f" if price < 0.01 else ".4f"
-                    
-                    # Kaydet (TP3 = TP2, çünkü range'de sadece 2 TP var)
-                    islem_kaydet(coin, range_sinyal, price, tp1_price, tp2_price, tp2_price, sl_price)
-                    SON_SINYAL_ZAMANI[coin] = datetime.now()
-                    
-                    print(f"📊 RANGE {range_sinyal}: {coin} (Score: {range_skor}/60, ADX: {range_details['adx']:.1f})")
-                    
-                    # Grafik oluştur
-                    resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, f"RANGE {range_sinyal}")
-                    ikon = "🟢" if range_sinyal == "LONG" else "🔴"
-                    
-                    mesaj = f"""
-📊 <b>RANGE TRADING SİNYAL ({range_sinyal})</b> #V5.8-RANGE
-
-🪙 <b>Coin:</b> #{coin}
-
-💰 <b>Giriş:</b> ${price:{p_fmt}}
-
-🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} 
-🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} 
-🛑 <b>SL:</b> ${sl_price:{p_fmt}} 
-
-
-"""
-                    try:
-                        if resim:
-                            await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
-                        else:
-                            await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
-                    except Exception as e:
-                        print(f"Telegram Hatasi (Range): {e}")
+        # V5.9: Range Trading KALDIRILDI - Sadece Trend + Rapid stratejileri aktif
 
 # ==========================================
 # ⚡ BÖLÜM 5.5: RAPID REVERSAL TARAMA
@@ -1628,7 +1571,8 @@ async def rapid_strateji_tarama(exchange):
     """
     print(f"⚡ ({datetime.now().strftime('%H:%M')}) RAPID REVERSAL TARAMA...")
     
-    RAPID_ESIK = 50  # Minimum rapid skor eşiği
+    # ESKİ: RAPID_ESIK = 50  # Çok fazla sinyal üretiyordu
+    RAPID_ESIK = 65  # YÜKSEK KALİTE: Güçlü reversal sinyalleri için artırıldı
     
     # Coin verilerini çek
     async def fetch_candle(s):
@@ -1647,6 +1591,18 @@ async def rapid_strateji_tarama(exchange):
         
         # 🚫 ANTI-SPAM: Açık pozisyon varsa atla
         if pozisyon_acik_mi(coin):
+            continue
+        
+        # 🕐 V5.9 COOLDOWN: Rapid için de aynı cooldown uygula
+        if coin in SON_SINYAL_ZAMANI:
+            gecen_sure = (datetime.now() - SON_SINYAL_ZAMANI[coin]).total_seconds() / 3600
+            if gecen_sure < COIN_COOLDOWN_SAAT:
+                continue
+        
+        # 📊 V5.9 GÜNLÜK LİMİT: Rapid sinyalleri de limiti kullanır
+        bugun_str = datetime.now().strftime("%Y-%m-%d")
+        bugunun_sinyal_sayisi = len([s for s in BUGUNUN_SINYALLERI if s[0] == bugun_str])
+        if bugunun_sinyal_sayisi >= GUNLUK_SINYAL_LIMIT:
             continue
         
         df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
@@ -1700,6 +1656,9 @@ async def rapid_strateji_tarama(exchange):
             # Kaydet (TP3'ü TP2 ile aynı tut - sadece 2 TP var)
             islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp2_price, sl_price)
             SON_SINYAL_ZAMANI[coin] = datetime.now()
+            
+            # V5.9: Günlük sinyal listesine ekle
+            BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, f"RAPID-{sinyal}"))
             
             print(f"⚡ RAPID {sinyal}: {coin} (Score: {skor}/100, Tetik: {', '.join(tetikleyiciler)})")
             
@@ -2005,7 +1964,7 @@ async def main():
     exchange = ccxt.kucoin(exchange_config)
     
     try:
-        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.6 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n✅ Filtre: BTC Puanlama + Hacim + Reversal\n✅ Borsa: KuCoin\n📊 Raporlama: Aktif\n🔄 Ani Yön Değişimi: Aktif\n💵 USDT Akış Analizi: Aktif\n⚡ Rapid Reversal: Aktif", parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=KANAL_ID, text="🚀 **TITANIUM BOT V5.9 BAŞLATILDI!**\n\n✅ Sistem: Aktif\n🎯 Sinyal Eşiği: 75/100 (Optimize)\n⚡ Rapid Eşiği: 65/100\n🕐 Cooldown: 4 saat/coin\n📊 Günlük Limit: Max 8 sinyal\n🚫 Range Trading: Devre Dışı\n✅ Borsa: KuCoin\n\n_Kalite > Miktar - Yalnızca En İyi Sinyaller!_", parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
