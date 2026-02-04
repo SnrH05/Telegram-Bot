@@ -33,8 +33,9 @@ logger = logging.getLogger(__name__)
 # 🛡️ PRODUCTION RISK MANAGEMENT
 from risk_manager import RiskManager
 from regime_detector import RegimeDetector, PositionSizer, SlippageModel, MarketRegime
+from state_manager import state_manager, periodic_save
 
-logger.info("⚙️ TITANIUM PREMIUM BOT (V6.0: PRODUCTION HARDENED) BAŞLATILIYOR...")
+logger.info("⚙️ TITANIUM PREMIUM BOT (V6.1: PRODUCTION HARDENED) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -58,7 +59,13 @@ bot = Bot(token=TOKEN)
 
 exchange_config = {
     'enableRateLimit': True,
-    'options': {'defaultType': 'spot'} 
+    'rateLimit': 50,  # 50ms bekleme - Binance rate limit koruması
+    'options': {
+        'defaultType': 'spot',
+        'adjustForTimeDifference': True,
+    },
+    # Retry ayarları
+    'timeout': 30000,  # 30 saniye timeout
 }
 
 # TITANIUM COIN LISTESI
@@ -2329,14 +2336,38 @@ async def main():
             status = risk_manager.get_status_summary()
             logger.info(f"📊 DD: {status['current_drawdown']:.1f}% | Daily: {status['daily_pnl']:.1f}% | KS: {'🔴' if status['kill_switch_active'] else '🟢'}")
             
+            # 💾 Periyodik state kaydetme (her döngüde)
+            periodic_save(
+                positions=None,  # DB'den çekilir
+                signals=BUGUNUN_SINYALLERI,
+                cooldowns=SON_SINYAL_ZAMANI
+            )
+            
             logger.debug("💤 Bekleme (1dk)...")
             await asyncio.sleep(60) 
     except KeyboardInterrupt:
         logger.info("🛑 Bot Durduruluyor...")
     finally:
+        # 💾 Son state kaydet
+        state_manager.state["is_running"] = False
+        state_manager.save_state()
+        logger.info("💾 State kaydedildi")
         await exchange.close()
 
 if __name__ == "__main__":
+    # 🔄 Crash recovery kontrolü
+    recovery = state_manager.recover_from_crash()
+    if recovery.get("recovered"):
+        logger.info(f"🔄 RECOVERY: Son state {recovery['age_hours']:.1f} saat önce")
+        logger.info(f"   - Açık pozisyon: {recovery['open_positions']}")
+        logger.info(f"   - Günlük sinyal: {recovery['daily_signals']}")
+        SON_SINYAL_ZAMANI.update(recovery.get('cooldowns', {}))
+        BUGUNUN_SINYALLERI.extend(recovery.get('signals', []))
+    
+    # Shutdown handler kaydet
+    state_manager.register_shutdown_handlers()
+    state_manager.set_running(True)
+    
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
