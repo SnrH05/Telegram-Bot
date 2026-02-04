@@ -1487,9 +1487,9 @@ async def piyasayi_tarama(exchange):
         if rev_long > 0 or rev_short > 0:
             print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
-        # ========== SİNYAL KARARI (%75 EŞİĞİ - V5.9 OPTİMİZE) ==========
-        ESIK = 75  # YÜKSEK KALİTE: Günlük 5-6 sinyal hedefi için artırıldı
-        YAKIN_ESIK = 55  # "Yakın" sayılacak minimum skor (artırıldı)
+        # ========== SİNYAL KARARI (%60 EŞİĞİ - V5.9 OPTİMİZE) ==========
+        ESIK = 60  # YÜKSEK KALİTE: Günlük 5-6 sinyal hedefi için artırıldı
+        YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor (artırıldı)
         
         # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
         max_score = max(long_score, short_score)
