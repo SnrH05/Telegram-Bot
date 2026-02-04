@@ -144,6 +144,65 @@ def calculate_adx(df, period=14):
     # Replace NaN/inf with 0 (no trend)
     return df['adx'].fillna(0).replace([np.inf, -np.inf], 0)
 
+def calculate_trend_aware_sl_multiplier(df, direction):
+    """
+    🛡️ TREND-UYUMLU DİNAMİK SL ÇARPANI (V6.1)
+    
+    Güçlü trend dönemlerinde SL'i genişlet, zayıf trendde daralt.
+    
+    Kriterler:
+    - ADX > 35: Çok güçlü trend → 3.0x ATR
+    - ADX > 25 + EMA dizilimi: Güçlü trend → 2.5x ATR
+    - ADX > 20: Normal trend → 2.0x ATR
+    - ADX < 20: Zayıf/Sideways → 1.5x ATR
+    
+    EMA Dizilimi:
+    - LONG: EMA9 > EMA21 > EMA50 (bullish)
+    - SHORT: EMA9 < EMA21 < EMA50 (bearish)
+    
+    Returns:
+        sl_multiplier (float), trend_strength (str)
+    """
+    try:
+        # ADX hesapla
+        adx_val = calculate_adx(df).iloc[-1]
+        
+        # EMA'ları hesapla
+        ema9 = calculate_ema(df['close'], 9).iloc[-1]
+        ema21 = calculate_ema(df['close'], 21).iloc[-1]
+        ema50 = calculate_ema(df['close'], 50).iloc[-1]
+        
+        # EMA dizilimi kontrolü
+        bullish_alignment = ema9 > ema21 > ema50
+        bearish_alignment = ema9 < ema21 < ema50
+        
+        # Trend yönüyle uyumlu mu?
+        trend_aligned = (direction == "LONG" and bullish_alignment) or \
+                       (direction == "SHORT" and bearish_alignment)
+        
+        # RSI momentum kontrolü (trend devam ediyor mu?)
+        rsi = calculate_rsi(df['close']).iloc[-1]
+        rsi_confirms = (direction == "LONG" and 40 < rsi < 70) or \
+                      (direction == "SHORT" and 30 < rsi < 60)
+        
+        # SL çarpanını belirle
+        if adx_val > 35 and trend_aligned:
+            # Çok güçlü trend - geniş SL
+            return 4.0, "ÇOK GÜÇLÜ"
+        elif adx_val > 25 and trend_aligned and rsi_confirms:
+            # Güçlü onaylı trend
+            return 2.5, "GÜÇLÜ"
+        elif adx_val > 20:
+            # Normal trend
+            return 2.0, "NORMAL"
+        else:
+            # Zayıf/sideways piyasa - standart SL
+            return 2.0, "ZAYIF"
+            
+    except Exception as e:
+        logger.warning(f"⚠️ Trend SL hesaplama hatası: {e}")
+        return 2.0, "DEFAULT"
+
 # ==========================================
 # 🔄 BÖLÜM 1.5: ANİ YÖN DEĞİŞİMİ TESPİTİ (REVERSAL)
 # ==========================================
@@ -304,6 +363,79 @@ def calculate_bollinger(df, period=20, std_dev=2):
     upper = sma + (std * std_dev)
     lower = sma - (std * std_dev)
     return lower, sma, upper
+
+def detect_volatility_squeeze(df, bb_period=20, vol_lookback=10):
+    """
+    🔥 VOLATILITY SQUEEZE TESPİTİ (V6.1: ATR Z-score eklendi)
+    
+    Bollinger Squeeze + Volume Spike + ATR Normal = Patlama Öncesi Tespit
+    
+    Kriterler:
+    - BB genişliği son 50 mumun en dar %20'sinde
+    - Son 3 mumda hacim ortalamanın 1.5x+ üstüne çıkmış
+    - ATR Z-score < 1.5 (volatilite henüz patlamadı)
+    
+    Returns:
+        is_squeeze (bool), squeeze_score (int), squeeze_details (dict)
+    """
+    try:
+        # Bollinger hesapla
+        sma = df['close'].rolling(bb_period).mean()
+        std = df['close'].rolling(bb_period).std()
+        bb_width = ((std * 2) / sma * 100).iloc[-1]
+        
+        # BB genişliği tarihsel olarak düşük mü?
+        bb_width_history = ((std * 2) / sma * 100).tail(50)
+        bb_percentile = (bb_width_history < bb_width).sum() / len(bb_width_history) * 100
+        is_bb_tight = bb_percentile < 20  # En dar %20'de
+        
+        # Hacim artıyor mu?
+        vol_sma = df['volume'].rolling(20).mean().iloc[-1]
+        recent_vol_avg = df['volume'].tail(3).mean()
+        vol_ratio = recent_vol_avg / vol_sma if vol_sma > 0 else 1
+        vol_expanding = vol_ratio > 1.5
+        
+        # 🆕 V6.1: ATR Z-score kontrolü (volatilite henüz patlamadı mı?)
+        atr = calculate_atr(df)
+        atr_current = atr.iloc[-1]
+        atr_sma = atr.rolling(50).mean().iloc[-1]
+        atr_std = atr.rolling(50).std().iloc[-1]
+        
+        atr_z_score = 0
+        is_atr_normal = True
+        if not pd.isna(atr_std) and atr_std > 0:
+            atr_z_score = (atr_current - atr_sma) / atr_std
+            is_atr_normal = atr_z_score < 1.5  # Volatilite henüz patlamadı
+        
+        # Üçü birden = SQUEEZE! (V6.1: ATR koşulu eklendi)
+        is_squeeze = is_bb_tight and vol_expanding and is_atr_normal
+        
+        # Squeeze skoru hesapla (0-15 puan bonus)
+        squeeze_score = 0
+        if is_squeeze:
+            # BB ne kadar dar? (max 8 puan)
+            bb_score = min(8, int((20 - bb_percentile) / 2.5))
+            # Hacim ne kadar yüksek? (max 7 puan)
+            vol_score = min(7, int((vol_ratio - 1) * 3.5))
+            squeeze_score = bb_score + vol_score
+        
+        details = {
+            'bb_width': round(bb_width, 2),
+            'bb_percentile': round(bb_percentile, 1),
+            'vol_ratio': round(vol_ratio, 2),
+            'atr_z_score': round(atr_z_score, 2),
+            'is_bb_tight': is_bb_tight,
+            'vol_expanding': vol_expanding,
+            'is_atr_normal': is_atr_normal,
+            'squeeze_score': squeeze_score
+        }
+        
+        return is_squeeze, squeeze_score, details
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Squeeze detection error: {e}")
+        return False, 0, {}
+
 
 def is_ranging_market(df, adx_threshold=20):
     """
@@ -1383,7 +1515,7 @@ async def piyasayi_tarama(exchange):
             short_score += 3
             short_breakdown.append("USDT:3")
         
-        # 1️⃣ BTC SKORU (max 20 puan)
+        # 1️⃣ BTC SKORU (max 20 puan) - V6.1: Nötr bölge eklendi
         if btc_score >= 1.5:
             long_score += 20
             long_breakdown.append("BTC:20")
@@ -1393,6 +1525,9 @@ async def piyasayi_tarama(exchange):
         elif btc_score >= 0.5:
             long_score += 10
             long_breakdown.append("BTC:10")
+        elif btc_score >= 0.3:  # 🆕 Nötr-pozitif bölge
+            long_score += 5
+            long_breakdown.append("BTC:5")
             
         if btc_score <= -1.5:
             short_score += 20
@@ -1403,6 +1538,9 @@ async def piyasayi_tarama(exchange):
         elif btc_score <= -0.5:
             short_score += 10
             short_breakdown.append("BTC:10")
+        elif btc_score <= -0.3:  # 🆕 Nötr-negatif bölge
+            short_score += 5
+            short_breakdown.append("BTC:5")
         
         # 2️⃣ 4H HTF TREND (max 15 puan)
         if htf_bullish:
@@ -1412,13 +1550,24 @@ async def piyasayi_tarama(exchange):
             short_score += 15
             short_breakdown.append("HTF:15")
         
-        # 3️⃣ SMA200 TREND (max 12 puan)
-        if price > curr['sma200']:
+        # 3️⃣ SMA200 TREND (max 12 puan) - V6.1: %1.5 mesafe koşulu eklendi
+        sma200_val = curr['sma200']
+        sma200_distance_pct = abs((price - sma200_val) / sma200_val) * 100 if sma200_val > 0 else 0
+        
+        # Sadece %1.5+ mesafede puan ver (whipsaw önleme)
+        if price > sma200_val and sma200_distance_pct >= 1.5:
             long_score += 12
             long_breakdown.append("SMA200:12")
-        if price < curr['sma200']:
+        elif price > sma200_val and sma200_distance_pct >= 0.5:
+            long_score += 6  # Yakın bölgede yarım puan
+            long_breakdown.append("SMA200:6")
+            
+        if price < sma200_val and sma200_distance_pct >= 1.5:
             short_score += 12
             short_breakdown.append("SMA200:12")
+        elif price < sma200_val and sma200_distance_pct >= 0.5:
+            short_score += 6  # Yakın bölgede yarım puan
+            short_breakdown.append("SMA200:6")
         
         # 4️⃣ ADX GÜÇ (max 7 puan)
         if adx_val > 30:
@@ -1466,6 +1615,25 @@ async def piyasayi_tarama(exchange):
             short_score += 3
             short_breakdown.append("RSI:3")
         
+        # 🆕 V6.1: RSI 4H TEYİDİ (+5 bonus)
+        # 1H RSI ile 4H RSI aynı yönü gösteriyorsa bonus puan
+        if coin in htf_data and htf_data[coin]:
+            try:
+                df_4h = pd.DataFrame(htf_data[coin], columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+                rsi_4h = calculate_rsi(df_4h['close']).iloc[-1]
+                
+                # LONG: 1H RSI < 45 VE 4H RSI < 50 = Teyit
+                if rsi_val < 45 and rsi_4h < 50:
+                    long_score += 5
+                    long_breakdown.append("RSI4H:5")
+                
+                # SHORT: 1H RSI > 55 VE 4H RSI > 50 = Teyit
+                if rsi_val > 55 and rsi_4h > 50:
+                    short_score += 5
+                    short_breakdown.append("RSI4H:5")
+            except Exception:
+                pass  # 4H RSI hesaplanamadı, bonus yok
+        
         # 6️⃣ HACİM ANALİZİ (max 8 puan)
         vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
         curr_vol = df['volume'].iloc[-1]
@@ -1487,24 +1655,63 @@ async def piyasayi_tarama(exchange):
             long_breakdown.append("VOL:2")
             short_breakdown.append("VOL:2")
         
+        # 🆕 V6.1: OBV (On-Balance Volume) TRENDİ (+3 bonus)
+        # Hacim yönünün fiyat yönüyle uyumunu kontrol et
+        try:
+            obv = ((df['close'].diff() > 0).astype(int) * 2 - 1) * df['volume']
+            obv_cumsum = obv.cumsum()
+            obv_sma10 = obv_cumsum.rolling(10).mean()
+            
+            # OBV son 10 mumda yükseliyor mu?
+            obv_rising = obv_cumsum.iloc[-1] > obv_sma10.iloc[-1]
+            obv_falling = obv_cumsum.iloc[-1] < obv_sma10.iloc[-1]
+            
+            if obv_rising:
+                long_score += 3
+                long_breakdown.append("OBV:3")
+            if obv_falling:
+                short_score += 3
+                short_breakdown.append("OBV:3")
+        except Exception:
+            pass  # OBV hesaplanamadı
+        
         # 7️⃣ ANİ YÖN DEĞİŞİMİ - REVERSAL (max 18 puan)
         # Reversal skorunu 30'dan 18'e normalize et (18/30 = 0.6 oranı)
+        # V6.1: ADX < 20 ise reversal puanını yarıya indir (choppy piyasa koruması)
+        reversal_multiplier = 0.3 if adx_val < 20 else 0.6  # 🆕 ADX kontrolü
+        
         if rev_long > 0:
-            normalized_rev_long = int(rev_long * 0.6)
+            normalized_rev_long = int(rev_long * reversal_multiplier)
             long_score += normalized_rev_long
-            long_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*0.6)}" for d in rev_details])
+            long_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*reversal_multiplier)}" for d in rev_details])
         if rev_short > 0:
-            normalized_rev_short = int(rev_short * 0.6)
+            normalized_rev_short = int(rev_short * reversal_multiplier)
             short_score += normalized_rev_short
-            short_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*0.6)}" for d in rev_details])
+            short_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*reversal_multiplier)}" for d in rev_details])
         
         # Debug log for reversal detection
         if rev_long > 0 or rev_short > 0:
-            logger.debug(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
+            adx_note = " [ADX<20: YARIM]" if adx_val < 20 else ""
+            logger.debug(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*reversal_multiplier)} | SHORT+{int(rev_short*reversal_multiplier)} | {rev_details}{adx_note}")
         
-        # ========== SİNYAL KARARI (%60 EŞİĞİ - V5.9 OPTİMİZE) ==========
-        ESIK = 60  # YÜKSEK KALİTE: Günlük 5-6 sinyal hedefi için artırıldı
-        YAKIN_ESIK = 40  # "Yakın" sayılacak minimum skor (artırıldı)
+        # 🔥 8️⃣ VOLATILITY SQUEEZE BONUS (max 15 puan)
+        # BB daralması + Hacim artışı = Büyük hareket öncüsü
+        is_squeeze, squeeze_bonus, squeeze_details = detect_volatility_squeeze(df)
+        if is_squeeze and squeeze_bonus > 0:
+            long_score += squeeze_bonus
+            short_score += squeeze_bonus
+            long_breakdown.append(f"SQUEEZE:{squeeze_bonus}")
+            short_breakdown.append(f"SQUEEZE:{squeeze_bonus}")
+            logger.info(f"🔥 SQUEEZE TESPİT: {coin} | BB%={squeeze_details.get('bb_percentile', 0):.0f} | Vol={squeeze_details.get('vol_ratio', 1):.1f}x | Bonus: +{squeeze_bonus}")
+        
+        # ========== SİNYAL KARARI (V6.1: DİNAMİK EŞİK) ==========
+        # Maksimum teorik puan hesapla (tüm yön bağımsız + en yüksek yön bağımlı puanlar)
+        # BTC:20 + Reversal:18 + HTF:15 + Squeeze:15 + SMA200:12 + USDT:10 + RSI:10 + RSI4H:5 + VOL:8 + OBV:3 + ADX:7 = 123
+        MAX_TEORIK_PUAN = 123
+        ESIK_ORAN = 0.60  # %60 eşik
+        
+        ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN)  # 123 * 0.60 = 74
+        YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.40)  # 123 * 0.40 = 49
         
         # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
         max_score = max(long_score, short_score)
@@ -1535,11 +1742,16 @@ async def piyasayi_tarama(exchange):
                 logger.info(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
                 continue  # Volatilite yetersiz, sinyal verme
             
-            # ATR Multipliers: SL=2x, TP1=2.5x, TP2=4.5x, TP3=7x (YÜKSEK KÂR)
-            atr_sl = atr_val * 2.0    # Stop Loss: 2x ATR
-            atr_tp1 = atr_val * 2.5   # TP1: 2.5x ATR (artırıldı)
-            atr_tp2 = atr_val * 4.5   # TP2: 4.5x ATR (artırıldı)
-            atr_tp3 = atr_val * 7.0   # TP3: 7x ATR (artırıldı)
+            # 🆕 V6.1: Trend-Uyumlu Dinamik SL Çarpanı
+            sl_multiplier, trend_strength = calculate_trend_aware_sl_multiplier(df, sinyal)
+            
+            # ATR Multipliers: SL=dinamik, TP1=2.5x, TP2=4.5x, TP3=7x
+            atr_sl = atr_val * sl_multiplier  # Dinamik SL çarpanı
+            atr_tp1 = atr_val * 2.5   # TP1: 2.5x ATR
+            atr_tp2 = atr_val * 4.5   # TP2: 4.5x ATR
+            atr_tp3 = atr_val * 7.0   # TP3: 7x ATR
+            
+            logger.debug(f"📊 {coin} SL: {sl_multiplier}x ATR (Trend: {trend_strength})")
             
             if sinyal == "LONG":
                 tp1_price = price + atr_tp1
@@ -1580,8 +1792,18 @@ async def piyasayi_tarama(exchange):
             # Reversal bilgisi
             rev_info = "🔄 Reversal: " + "+".join(rev_details) if rev_details else ""
             
+            # Yüzdelik değişimleri hesapla (SHORT için mutlak değer - kazanç olarak göster)
+            tp1_pct = abs((tp1_price - price) / price) * 100
+            tp2_pct = abs((tp2_price - price) / price) * 100
+            tp3_pct = abs((tp3_price - price) / price) * 100
+            sl_pct = abs((sl_price - price) / price) * 100
+            
+            # TP'ler + (kazanç), SL - (risk) olarak göster
+            tp_sign = "+"
+            sl_sign = "-"
+            
             mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V5.7-CVD
+{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V6.1
 
 🪙 <b>Coin:</b> #{coin}
 🌍 <b>BTC:</b> {btc_score} {btc_ikon}
@@ -1591,12 +1813,12 @@ async def piyasayi_tarama(exchange):
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} 
-🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} 
-🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} 
-🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} 
+🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} ({tp_sign}{tp1_pct:.2f}%)
+🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} ({tp_sign}{tp2_pct:.2f}%)
+🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} ({tp_sign}{tp3_pct:.2f}%)
+🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} ({sl_sign}{sl_pct:.2f}%)
 
-📌 <i>%{skor_deger} Güven Skoru ile Sinyal</i>
+📌 <i>%{skor_deger} Güven Skoru</i>
 """
             try:
                 if resim:
@@ -1716,8 +1938,13 @@ async def rapid_strateji_tarama(exchange):
             detail_str = '+'.join(rapid_details)
             tetik_str = ' + '.join(tetikleyiciler) if tetikleyiciler else "Multi-trigger"
             
+            # Yüzdelik değişimleri hesapla (mutlak değer - kazanç olarak göster)
+            tp1_pct = abs((tp1_price - price) / price) * 100
+            tp2_pct = abs((tp2_price - price) / price) * 100
+            sl_pct = abs((sl_price - price) / price) * 100
+            
             mesaj = f"""
-⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V5.7-RAPID
+⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V6.1-RAPID
 
 🪙 <b>Coin:</b> #{coin}
 🔥 <b>Rapid Skor:</b> {skor}/100 ({detail_str})
@@ -1725,9 +1952,9 @@ async def rapid_strateji_tarama(exchange):
 
 💰 <b>Giriş:</b> ${price:{p_fmt}}
 
-🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} 
-🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} 
-🛑 <b>SL:</b> ${sl_price:{p_fmt}} 
+🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.2f}%)
+🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.2f}%)
+🛑 <b>SL:</b> ${sl_price:{p_fmt}} (-{sl_pct:.2f}%)
 
 ⚠️ <i>RAPID sinyal - Hızlı hareket bekleniyor!</i>
 """
