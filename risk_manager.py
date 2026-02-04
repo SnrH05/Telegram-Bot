@@ -294,10 +294,10 @@ class RiskManager:
         if dd_status in ("HALT", "EMERGENCY"):
             return False, 0.0, f"Drawdown: {dd_status}"
         
-        # 3. Daily limit check
-        daily_status, should_close = self.daily_limit.check_status()
-        if daily_status in ("HALTED", "EMERGENCY"):
-            return False, 0.0, f"Daily limit: {daily_status}"
+        # 3. Daily limit check - DISABLED (user request)
+        # daily_status, should_close = self.daily_limit.check_status()
+        # if daily_status in ("HALTED", "EMERGENCY"):
+        #     return False, 0.0, f"Daily limit: {daily_status}"
         
         return True, size_mult, "OK"
     

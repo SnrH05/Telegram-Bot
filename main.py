@@ -2011,7 +2011,7 @@ async def main():
 🛡️ <b>YENİ: Production Hardened</b>
 • Kill-Switch: ATR Z-Score + BTC Flash
 • Drawdown Monitor: 10%/15%/20% Limits
-• Daily Loss Limit: -5%/-8%
+• Daily Loss Limit: KALDIRILDI
 • Regime Detection: TREND/RANGE/NO_TRADE
 • Position Sizing: Kelly-Inspired
 
