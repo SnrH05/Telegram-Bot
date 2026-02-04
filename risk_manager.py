@@ -11,11 +11,15 @@ Components:
 Author: TITANIUM Bot V5.9
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Tuple, Optional
 import sqlite3
+
+# Logger yapılandırması
+logger = logging.getLogger(__name__)
 
 
 class KillSwitch:
@@ -99,14 +103,14 @@ class KillSwitch:
         self.activation_time = datetime.now()
         self.reason = reason
         self.cooldown_hours = 6 if emergency else 2
-        print(f"🚨 KILL-SWITCH ACTIVATED: {reason}")
+        logger.warning(f"🚨 KILL-SWITCH ACTIVATED: {reason}")
     
     def force_deactivate(self):
         """Manual override to deactivate kill-switch."""
         self.is_active = False
         self.activation_time = None
         self.reason = ""
-        print("✅ Kill-switch manually deactivated")
+        logger.info("✅ Kill-switch manually deactivated")
 
 
 class DrawdownMonitor:
@@ -162,13 +166,13 @@ class DrawdownMonitor:
         
         if dd >= self.LEVEL_3_DD:
             self.halt_until = datetime.now() + timedelta(hours=24)
-            print(f"🚨 DRAWDOWN EMERGENCY: {dd:.1f}% - Halting for 24h")
+            logger.critical(f"🚨 DRAWDOWN EMERGENCY: {dd:.1f}% - Halting for 24h")
             return "EMERGENCY", 0.0
         elif dd >= self.LEVEL_2_DD:
-            print(f"⚠️ DRAWDOWN HIGH: {dd:.1f}% - Signals halted")
+            logger.warning(f"⚠️ DRAWDOWN HIGH: {dd:.1f}% - Signals halted")
             return "HALT", 0.0
         elif dd >= self.LEVEL_1_DD:
-            print(f"⚠️ DRAWDOWN WARNING: {dd:.1f}% - Reducing position size")
+            logger.warning(f"⚠️ DRAWDOWN WARNING: {dd:.1f}% - Reducing position size")
             return "REDUCE_SIZE", 0.5
         else:
             return "NORMAL", 1.0
@@ -190,7 +194,7 @@ class DrawdownMonitor:
                 self.update_equity(equity)
                 return equity
         except Exception as e:
-            print(f"⚠️ Equity calculation error: {e}")
+            logger.error(f"⚠️ Equity calculation error: {e}")
             return self.current_equity
 
 
@@ -223,7 +227,7 @@ class DailyLimitTracker:
                 """, (today,))
                 return cursor.fetchone()[0]
         except Exception as e:
-            print(f"⚠️ Daily PnL calculation error: {e}")
+            logger.error(f"⚠️ Daily PnL calculation error: {e}")
             return 0.0
     
     def check_status(self) -> Tuple[str, bool]:
@@ -243,11 +247,11 @@ class DailyLimitTracker:
         daily_pnl = self.get_daily_pnl()
         
         if daily_pnl <= self.LEVEL_2_LOSS:
-            print(f"🚨 DAILY LOSS EMERGENCY: {daily_pnl:.1f}% - Closing all positions!")
+            logger.critical(f"🚨 DAILY LOSS EMERGENCY: {daily_pnl:.1f}% - Closing all positions!")
             self._halt_until_tomorrow()
             return "EMERGENCY", True
         elif daily_pnl <= self.LEVEL_1_LOSS:
-            print(f"⚠️ DAILY LOSS LIMIT: {daily_pnl:.1f}% - Halting for today")
+            logger.warning(f"⚠️ DAILY LOSS LIMIT: {daily_pnl:.1f}% - Halting for today")
             self._halt_until_tomorrow()
             return "HALTED", False
         

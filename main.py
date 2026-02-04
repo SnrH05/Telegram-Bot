@@ -5,6 +5,7 @@ import sys
 import sqlite3
 import time
 import re
+import logging
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
@@ -15,11 +16,25 @@ from google import genai
 from telegram import Bot
 from telegram.constants import ParseMode
 
+# ==========================================
+# 📋 LOGGING YAPILANDIRMASI
+# ==========================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # Konsola yaz
+        logging.FileHandler('titanium_bot.log', encoding='utf-8')  # Dosyaya yaz
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # 🛡️ PRODUCTION RISK MANAGEMENT
 from risk_manager import RiskManager
 from regime_detector import RegimeDetector, PositionSizer, SlippageModel, MarketRegime
 
-print("⚙️ TITANIUM PREMIUM BOT (V6.0: PRODUCTION HARDENED) BAŞLATILIYOR...")
+logger.info("⚙️ TITANIUM PREMIUM BOT (V6.0: PRODUCTION HARDENED) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
@@ -29,7 +44,7 @@ KANAL_ID = int(os.getenv("KANAL_ID", "0"))
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
 if not TOKEN or not GEMINI_KEY or not KANAL_ID:
-    print("❌ HATA: ENV bilgileri eksik! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
+    logger.error("❌ HATA: ENV bilgileri eksik! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
     # sys.exit(1) 
 
 # Gemini Client
@@ -37,7 +52,7 @@ client = None
 try:
     client = genai.Client(api_key=GEMINI_KEY, http_options={"api_version": "v1"})
 except Exception as e:
-    print(f"⚠️ Gemini Client başlatılamadı: {e}")
+    logger.warning(f"⚠️ Gemini Client başlatılamadı: {e}")
 
 bot = Bot(token=TOKEN)
 
@@ -738,7 +753,7 @@ def _grafik_olustur_sync(coin, df_gelen, tp, sl, yon):
         buf.seek(0)
         return buf
     except Exception as e:
-        print(f"Grafik Hatası: {e}")
+        logger.error(f"Grafik Hatası: {e}")
         return None
 
 async def grafik_olustur_async(coin, df, tp, sl, yon):
@@ -772,9 +787,9 @@ def db_ilk_kurulum():
         except sqlite3.OperationalError as e:
             # This error occurs if the column already exists or if 'tp' column doesn't exist to drop
             if "duplicate column name" not in str(e) and "no such column" not in str(e):
-                print(f"DB Migration Error: {e}")
+                logger.warning(f"DB Migration Error: {e}")
         except Exception as e:
-            print(f"Unexpected DB Migration Error: {e}")
+            logger.error(f"Unexpected DB Migration Error: {e}")
         
         # Haberler Tablosu (Haber Hafızası)
         conn.execute("CREATE TABLE IF NOT EXISTS haberler (link TEXT PRIMARY KEY)")
@@ -804,7 +819,7 @@ def islem_kaydet(coin, yon, giris, tp1, tp2, tp3, sl):
 async def gunluk_rapor_gonder():
     try:
         bugun = datetime.now().strftime("%Y-%m-%d")
-        print(f"📊 {bugun} Günlük Rapor Hazırlanıyor...")
+        logger.info(f"📊 {bugun} Günlük Rapor Hazırlanıyor...")
 
         with sqlite3.connect("titanium_live.db") as conn:
             # TP hit bilgilerini de çek
@@ -876,7 +891,7 @@ async def gunluk_rapor_gonder():
         await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
 
     except Exception as e:
-        print(f"❌ Günlük Rapor Hatası: {e}")
+        logger.error(f"❌ Günlük Rapor Hatası: {e}")
 
 
 
@@ -905,7 +920,7 @@ def _ai_analiz_sync(prompt):
         skor = int(skor_match.group(1)) if skor_match else 0
         return temiz_ozet, skor
     except Exception as e:
-        print(f"⚠️ AI Analiz Hatası: {e}")
+        logger.warning(f"⚠️ AI Analiz Hatası: {e}")
         return "Analiz yapılamadı.", 0
 
 async def ai_analiz(baslik, ozet):
@@ -914,7 +929,7 @@ async def ai_analiz(baslik, ozet):
     return await loop.run_in_executor(None, _ai_analiz_sync, prompt)
 
 async def haberleri_kontrol_et():
-    print("📰 Haberler taranıyor...")
+    logger.info("📰 Haberler taranıyor...")
     for rss in RSS_LIST:
         try:
             feed = feedparser.parse(rss)
@@ -933,10 +948,10 @@ async def haberleri_kontrol_et():
                 try:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
                 except Exception as tg_err:
-                    print(f"⚠️ Telegram Haber Gönderim Hatası: {tg_err}")
+                    logger.warning(f"⚠️ Telegram Haber Gönderim Hatası: {tg_err}")
                 await asyncio.sleep(2)
         except Exception as rss_err:
-            print(f"⚠️ RSS Okuma Hatası ({rss}): {rss_err}")
+            logger.warning(f"⚠️ RSS Okuma Hatası ({rss}): {rss_err}")
 
 # ==========================================
 # 🧠 BÖLÜM 4.5: AKILLI TRAILING - TREND GÜCÜ ANALİZİ
@@ -1040,17 +1055,17 @@ async def trend_gucunu_analiz_et(exchange, coin, yon, mevcut_fiyat):
         
         detay['puan'] = puan
         
-        print(f"📊 TREND ANALİZİ: {coin} ({yon})")
-        print(f"   RSI: {rsi_now:.1f} {'✅' if detay['rsi_ok'] else '❌'}")
-        print(f"   SMA20: {'✅' if detay['sma20_ok'] else '❌'}")
-        print(f"   ADX: {adx_now:.1f} {'✅' if detay['adx_ok'] else '❌'}")
-        print(f"   Hacim: {vol_ratio:.2f}x {'✅' if detay['vol_ok'] else '❌'}")
-        print(f"   TOPLAM: {puan}/100 → {trend_gucu}")
+        logger.debug(f"📊 TREND ANALİZİ: {coin} ({yon})")
+        logger.debug(f"   RSI: {rsi_now:.1f} {'✅' if detay['rsi_ok'] else '❌'}")
+        logger.debug(f"   SMA20: {'✅' if detay['sma20_ok'] else '❌'}")
+        logger.debug(f"   ADX: {adx_now:.1f} {'✅' if detay['adx_ok'] else '❌'}")
+        logger.debug(f"   Hacim: {vol_ratio:.2f}x {'✅' if detay['vol_ok'] else '❌'}")
+        logger.debug(f"   TOPLAM: {puan}/100 → {trend_gucu}")
         
         return trend_gucu, sl_multiplier, detay
         
     except Exception as e:
-        print(f"⚠️ Trend Analiz Hatası ({coin}): {e}")
+        logger.error(f"⚠️ Trend Analiz Hatası ({coin}): {e}")
         # Hata durumunda güvenli mod - orta seviye
         return "ORTA", 1.0, {'puan': 50, 'atr': 0}
 
@@ -1139,12 +1154,12 @@ async def usdt_hacim_akisi_analiz(exchange):
         cvd_millions = total_cvd / 1_000_000
         
         # Detaylı log
-        print(f"� CVD AKIŞ: TotalVol=${total_volume_usd/1e9:.2f}B | CVD={cvd_millions:+.1f}M$ | Ratio={cvd_ratio*100:+.2f}% | {flow_direction}")
+        logger.debug(f"📊 CVD AKIŞ: TotalVol=${total_volume_usd/1e9:.2f}B | CVD={cvd_millions:+.1f}M$ | Ratio={cvd_ratio*100:+.2f}% | {flow_direction}")
         
         return usdt_score, cvd_millions, flow_direction
         
     except Exception as e:
-        print(f"⚠️ CVD Hacim Analiz Hatası: {e}")
+        logger.warning(f"⚠️ CVD Hacim Analiz Hatası: {e}")
         return 0.0, 0.0, 'NEUTRAL'
 
 async def btc_piyasa_puani_hesapla(exchange):
@@ -1202,11 +1217,11 @@ async def btc_piyasa_puani_hesapla(exchange):
                 
         return score
     except Exception as e:
-        print(f"⚠️ BTC Puan Hatası: {e}")
+        logger.warning(f"⚠️ BTC Puan Hatası: {e}")
         return 0
 
 async def piyasayi_tarama(exchange):
-    print(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.9 OPTİMİZE TARAMA (Eşik:75)...")
+    logger.info(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.9 OPTİMİZE TARAMA (Eşik:75)...")
     
     # 1. BTC PUANINI HESAPLA (Volume Destekli)
     btc_score = await btc_piyasa_puani_hesapla(exchange)
@@ -1218,7 +1233,7 @@ async def piyasayi_tarama(exchange):
     elif btc_score <= -0.5: btc_ikon = "🔴 (Bear)"
     else: btc_ikon = "⚪ (Nötr)"
 
-    print(f"🌍 BTC SKORU: {btc_score} -> {btc_ikon}")
+    logger.info(f"🌍 BTC SKORU: {btc_score} -> {btc_ikon}")
     
     # 2. USDT HACİM AKIŞI ANALİZİ (YENİ!)
     usdt_score, usdt_flow_m, usdt_direction = await usdt_hacim_akisi_analiz(exchange)
@@ -1231,7 +1246,7 @@ async def piyasayi_tarama(exchange):
     else:
         usdt_ikon = "➡️ Nötr"
     
-    print(f"💵 USDT AKIŞ SKORU: {usdt_score:.2f} | Net: {usdt_flow_m:+.1f}M$ | {usdt_ikon}")
+    logger.info(f"💵 USDT AKIŞ SKORU: {usdt_score:.2f} | Net: {usdt_flow_m:+.1f}M$ | {usdt_ikon}")
     
     # 2. COIN VERILERINI CEK
     async def fetch_candle(s):
@@ -1239,7 +1254,7 @@ async def piyasayi_tarama(exchange):
             ohlcv = await exchange.fetch_ohlcv(f"{s}/USDT", '1h', limit=300)
             return s, ohlcv
         except Exception as e:
-            print(f"⚠️ {s} veri çekme hatası: {e}")
+            logger.warning(f"⚠️ {s} veri çekme hatası: {e}")
             return s, None
 
     tasks = [fetch_candle(c) for c in COIN_LIST]
@@ -1252,7 +1267,7 @@ async def piyasayi_tarama(exchange):
             ohlcv_4h = await exchange.fetch_ohlcv(f"{s}/USDT", '4h', limit=60)
             return s, ohlcv_4h
         except Exception as e:
-            print(f"⚠️ {s} HTF veri hatası: {e}")
+            logger.warning(f"⚠️ {s} HTF veri hatası: {e}")
             return s, None
     
     htf_tasks = [fetch_htf_candle(c) for c in COIN_LIST]
@@ -1281,10 +1296,10 @@ async def piyasayi_tarama(exchange):
         
         # 🛡️ DEFENSIVE: Skip if any indicator is NaN or inf
         if pd.isna(rsi_val) or pd.isna(adx_val) or pd.isna(atr_val):
-            print(f"⚠️ SKIP {coin}: NaN indicator değeri (RSI={rsi_val}, ADX={adx_val}, ATR={atr_val})")
+            logger.warning(f"⚠️ SKIP {coin}: NaN indicator değeri (RSI={rsi_val}, ADX={adx_val}, ATR={atr_val})")
             continue
         if np.isinf(rsi_val) or np.isinf(adx_val) or np.isinf(atr_val):
-            print(f"⚠️ SKIP {coin}: Inf indicator değeri")
+            logger.warning(f"⚠️ SKIP {coin}: Inf indicator değeri")
             continue
         
         trend_guclu = adx_val > 25
@@ -1485,7 +1500,7 @@ async def piyasayi_tarama(exchange):
         
         # Debug log for reversal detection
         if rev_long > 0 or rev_short > 0:
-            print(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
+            logger.debug(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*0.6)} | SHORT+{int(rev_short*0.6)} | {rev_details}")
         
         # ========== SİNYAL KARARI (%60 EŞİĞİ - V5.9 OPTİMİZE) ==========
         ESIK = 60  # YÜKSEK KALİTE: Günlük 5-6 sinyal hedefi için artırıldı
@@ -1499,11 +1514,11 @@ async def piyasayi_tarama(exchange):
         if max_score >= ESIK:
             # Sinyal üretilecek - detaylı log
             sinyal_ikon = "🟢" if best_direction == "LONG" else "🔴"
-            print(f"{sinyal_ikon} SİNYAL! {coin}: {best_direction} {max_score}/100 ({'+'.join(best_breakdown)})")
+            logger.info(f"{sinyal_ikon} SİNYAL! {coin}: {best_direction} {max_score}/100 ({'+'.join(best_breakdown)})")
         elif max_score >= YAKIN_ESIK:
             # Eşiğe yakın - uyarı log
             eksik = ESIK - max_score
-            print(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
+            logger.debug(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
@@ -1517,7 +1532,7 @@ async def piyasayi_tarama(exchange):
             # V5.9: ATR yüzdesi %0.80'den düşükse sinyal verme (düşük volatilite)
             atr_pct = (atr_val / price) * 100
             if atr_pct < 0.80:
-                print(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
+                logger.info(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
                 continue  # Volatilite yetersiz, sinyal verme
             
             # ATR Multipliers: SL=2x, TP1=2.5x, TP2=4.5x, TP3=7x (YÜKSEK KÂR)
@@ -1553,7 +1568,7 @@ async def piyasayi_tarama(exchange):
             # V5.9: Günlük sinyal listesine ekle
             BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, sinyal))
             
-            print(f"🎯 {sinyal}: {coin} (Score: {long_score if sinyal == 'LONG' else short_score}/100, ATR: {atr_pct:.2f}%)")
+            logger.info(f"🎯 {sinyal}: {coin} (Score: {long_score if sinyal == 'LONG' else short_score}/100, ATR: {atr_pct:.2f}%)")
             
             resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, sinyal)
             ikon = "🟢" if sinyal == "LONG" else "🔴"
@@ -1589,7 +1604,7 @@ async def piyasayi_tarama(exchange):
                 else:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
-                print(f"Telegram Hatasi: {e}")
+                logger.error(f"Telegram Hatasi: {e}")
         
         # V5.9: Range Trading KALDIRILDI - Sadece Trend + Rapid stratejileri aktif
 
@@ -1601,7 +1616,7 @@ async def rapid_strateji_tarama(exchange):
     Rapid Reversal stratejisi - Ani piyasa değişimlerini tara
     Mevcut trend stratejisinden BAĞIMSIZ çalışır
     """
-    print(f"⚡ ({datetime.now().strftime('%H:%M')}) RAPID REVERSAL TARAMA...")
+    logger.info(f"⚡ ({datetime.now().strftime('%H:%M')}) RAPID REVERSAL TARAMA...")
     
     # ESKİ: RAPID_ESIK = 50  # Çok fazla sinyal üretiyordu
     RAPID_ESIK = 65  # YÜKSEK KALİTE: Güçlü reversal sinyalleri için artırıldı
@@ -1692,7 +1707,7 @@ async def rapid_strateji_tarama(exchange):
             # V5.9: Günlük sinyal listesine ekle
             BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, f"RAPID-{sinyal}"))
             
-            print(f"⚡ RAPID {sinyal}: {coin} (Score: {skor}/100, Tetik: {', '.join(tetikleyiciler)})")
+            logger.info(f"⚡ RAPID {sinyal}: {coin} (Score: {skor}/100, Tetik: {', '.join(tetikleyiciler)})")
             
             # 🎨 GRAFİK OLUŞTUR (YENİ!)
             resim = await grafik_olustur_async(coin, df.tail(50), tp1_price, sl_price, f"RAPID {sinyal}")
@@ -1722,7 +1737,7 @@ async def rapid_strateji_tarama(exchange):
                 else:
                     await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
-                print(f"Telegram Hatasi (Rapid): {e}")
+                logger.error(f"Telegram Hatasi (Rapid): {e}")
 
 # ==========================================
 # 🛡️ BÖLÜM 6: POZİSYON TAKİBİ (MULTI-TP)
@@ -1746,7 +1761,7 @@ async def pozisyonlari_yokla(exchange):
             p_fmt = ".8f" if fiyat < 0.01 else ".4f"
             
             # DEBUG LOG
-            print(f"🔍 {coin}: Fiyat=${fiyat:{p_fmt}} | SL=${sl:{p_fmt}} | TP1=${tp1:{p_fmt}} (hit={tp1_hit}) | TP2=${tp2:{p_fmt}} (hit={tp2_hit}) | TP3=${tp3:{p_fmt}}")
+            logger.debug(f"🔍 {coin}: Fiyat=${fiyat:{p_fmt}} | SL=${sl:{p_fmt}} | TP1=${tp1:{p_fmt}} (hit={tp1_hit}) | TP2=${tp2:{p_fmt}} (hit={tp2_hit}) | TP3=${tp3:{p_fmt}}")
             
             # --- TP1 CHECK (10% TOLERANS + AKILLI TRAILING) ---
             if not tp1_hit:
@@ -1819,9 +1834,9 @@ async def pozisyonlari_yokla(exchange):
                         # SHORT için: RSI < 55 VE fiyat < SMA20 = momentum güçlü
                         momentum_strong = (rsi_now < 55) and (fiyat < sma20)
                     
-                    print(f"📊 MOMENTUM {coin}: RSI={rsi_now:.1f}, SMA20={'✅' if (fiyat > sma20 if yon == 'LONG' else fiyat < sma20) else '❌'} -> {'GÜÇLÜ' if momentum_strong else 'ZAYIF'}")
+                    logger.debug(f"📊 MOMENTUM {coin}: RSI={rsi_now:.1f}, SMA20={'✅' if (fiyat > sma20 if yon == 'LONG' else fiyat < sma20) else '❌'} -> {'GÜÇLÜ' if momentum_strong else 'ZAYIF'}")
                 except Exception as mom_err:
-                    print(f"⚠️ Momentum Hatası ({coin}): {mom_err}")
+                    logger.warning(f"⚠️ Momentum Hatası ({coin}): {mom_err}")
                     momentum_strong = True  # Hata olursa default olarak devam et
             
             # --- TP2 CHECK (10% TOLERANS + AKILLI TRAILING) ---
@@ -1894,17 +1909,17 @@ async def pozisyonlari_yokla(exchange):
                         if new_trail_sl > sl:
                             with sqlite3.connect("titanium_live.db") as conn:
                                 conn.execute("UPDATE islemler SET sl=? WHERE id=?", (new_trail_sl, id))
-                            print(f"📈 TRAILING: {coin} SL güncellendi: ${sl:{p_fmt}} -> ${new_trail_sl:{p_fmt}}")
+                            logger.info(f"📈 TRAILING: {coin} SL güncellendi: ${sl:{p_fmt}} -> ${new_trail_sl:{p_fmt}}")
                             sl = new_trail_sl  # Güncel SL'i kullan
                     elif yon == "SHORT":  # FIX: Properly handle SHORT (was incorrectly nested)
                         new_trail_sl = fiyat + trailing_distance
                         if new_trail_sl < sl:
                             with sqlite3.connect("titanium_live.db") as conn:
                                 conn.execute("UPDATE islemler SET sl=? WHERE id=?", (new_trail_sl, id))
-                            print(f"📉 TRAILING: {coin} SL güncellendi: ${sl:{p_fmt}} -> ${new_trail_sl:{p_fmt}}")
+                            logger.info(f"📉 TRAILING: {coin} SL güncellendi: ${sl:{p_fmt}} -> ${new_trail_sl:{p_fmt}}")
                             sl = new_trail_sl
                 except Exception as trail_err:
-                    print(f"⚠️ Trailing Hesaplama Hatası ({coin}): {trail_err}")
+                    logger.warning(f"⚠️ Trailing Hesaplama Hatası ({coin}): {trail_err}")
             
             # --- TP3 CHECK (FULL EXIT - 10% TOLERANS) ---
             if tp1_hit and tp2_hit:
@@ -1982,7 +1997,7 @@ async def pozisyonlari_yokla(exchange):
                 await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
                 
         except Exception as e:
-            print(f"Pozisyon Takip Hatası ({coin}): {e}")
+            logger.error(f"Pozisyon Takip Hatası ({coin}): {e}")
             continue
 
 # ==========================================
@@ -1991,7 +2006,7 @@ async def pozisyonlari_yokla(exchange):
 async def main():
     global SON_RAPOR_TARIHI
     db_ilk_kurulum()
-    print("🚀 Titanium PREMIUM Bot V6.0 Aktif! (Production Hardened)")
+    logger.info("🚀 Titanium PREMIUM Bot V6.0 Aktif! (Production Hardened)")
     
     exchange = ccxt.kucoin(exchange_config)
     
@@ -2001,9 +2016,9 @@ async def main():
     position_sizer = PositionSizer(account_balance=1000.0)
     slippage_model = SlippageModel()
     
-    print("🛡️ Risk Manager: Initialized")
-    print("🧠 Regime Detector: Initialized")
-    print("⚙️ Position Sizer: Initialized")
+    logger.info("🛡️ Risk Manager: Initialized")
+    logger.info("🧠 Regime Detector: Initialized")
+    logger.info("⚙️ Position Sizer: Initialized")
     
     try:
         startup_msg = """🚀 <b>TITANIUM BOT V6.0 BAŞLATILDI!</b>
@@ -2011,19 +2026,18 @@ async def main():
 🛡️ <b>YENİ: Production Hardened</b>
 • Kill-Switch: ATR Z-Score + BTC Flash
 • Drawdown Monitor: 10%/15%/20% Limits
-• Daily Loss Limit: KALDIRILDI
 • Regime Detection: TREND/RANGE/NO_TRADE
 • Position Sizing: Kelly-Inspired
 
 ✅ Sistem: Aktif
-🎯 Sinyal Eşiği: 75/100
+🎯 Sinyal Eşiği: 60/100
 ⚡ Rapid Eşiği: 65/100
 ✅ Borsa: KuCoin
 
 <i>Survival > Profitability</i>"""
         await bot.send_message(chat_id=KANAL_ID, text=startup_msg, parse_mode=ParseMode.HTML)
     except Exception as e:
-        print(f"❌ Telegram Test Mesajı Hatası: {e}")
+        logger.error(f"❌ Telegram Test Mesajı Hatası: {e}")
 
     if "ETH" in COIN_LIST:
         COIN_LIST.remove("ETH")
@@ -2045,8 +2059,8 @@ async def main():
                 can_trade, size_mult, risk_reason = risk_manager.pre_signal_check(df_btc, atr_btc)
                 
                 if not can_trade:
-                    print(f"🚨 TRADING HALTED: {risk_reason}")
-                    print("💤 Waiting 5 minutes before retry...")
+                    logger.warning(f"🚨 TRADING HALTED: {risk_reason}")
+                    logger.info("💤 Waiting 5 minutes before retry...")
                     await asyncio.sleep(300)  # Wait 5 min and retry
                     continue
                 
@@ -2061,21 +2075,21 @@ async def main():
                     MarketRegime.NO_TRADE: "🚫 NO_TRADE",
                     MarketRegime.MIXED: "🔀 MIXED"
                 }
-                print(f"🧠 REGIME: {regime_icons.get(current_regime, 'UNKNOWN')} | {regime_details.get('reason', '')}")
+                logger.info(f"🧠 REGIME: {regime_icons.get(current_regime, 'UNKNOWN')} | {regime_details.get('reason', '')}")
                 
                 # Skip signal generation in NO_TRADE regime
                 if current_regime == MarketRegime.NO_TRADE:
-                    print("⏸️ NO_TRADE regime - skipping signal generation")
+                    logger.info("⏸️ NO_TRADE regime - skipping signal generation")
                     await asyncio.sleep(300)
                     continue
                     
             except Exception as risk_err:
-                print(f"⚠️ Risk check error: {risk_err}")
+                logger.warning(f"⚠️ Risk check error: {risk_err}")
                 # Continue with trading but log the error
             
             # Gün sonu raporu - İstanbul saati 23:55
             if simdi.hour == 23 and simdi.minute >= 55 and SON_RAPOR_TARIHI != bugun_str:
-                print(f"📊 Gün sonu raporu gönderiliyor... (İstanbul: {simdi.strftime('%H:%M')})")
+                logger.info(f"📊 Gün sonu raporu gönderiliyor... (İstanbul: {simdi.strftime('%H:%M')})")
                 await gunluk_rapor_gonder()
                 SON_RAPOR_TARIHI = bugun_str
             
@@ -2086,12 +2100,12 @@ async def main():
             
             # 📊 Periodic status log
             status = risk_manager.get_status_summary()
-            print(f"📊 DD: {status['current_drawdown']:.1f}% | Daily: {status['daily_pnl']:.1f}% | KS: {'🔴' if status['kill_switch_active'] else '🟢'}")
+            logger.info(f"📊 DD: {status['current_drawdown']:.1f}% | Daily: {status['daily_pnl']:.1f}% | KS: {'🔴' if status['kill_switch_active'] else '🟢'}")
             
-            print("💤 Bekleme (1dk)...")
+            logger.debug("💤 Bekleme (1dk)...")
             await asyncio.sleep(60) 
     except KeyboardInterrupt:
-        print("🛑 Bot Durduruluyor...")
+        logger.info("🛑 Bot Durduruluyor...")
     finally:
         await exchange.close()
 
