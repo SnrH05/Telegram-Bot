@@ -1,10 +1,10 @@
-# TITANIUM Bot V6.0 - Production Dependencies
-ccxt>=4.0.0
-pandas>=2.0.0
-numpy>=1.24.0
-mplfinance>=0.12.0
-matplotlib>=3.7.0
-feedparser>=6.0.0
-google-genai>=0.3.0
-python-telegram-bot>=20.0
-aiohttp>=3.8.0
+ccxt
+pandas
+numpy
+mplfinance==0.12.10b0
+matplotlib
+feedparser
+google-genai
+python-telegram-bot
+aiohttp
+
