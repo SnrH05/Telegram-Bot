@@ -1,0 +1,11 @@
+[build]
+builder = "nixpacks"
+
+[build.env]
+NIXPACKS_PYTHON_VERSION = "3.11"
+
+[deploy]
+startCommand = "python TITANIUM-STRATEJISI.py"
+restartPolicyType = "always"
+restartPolicyMaxRetries = 5
+
