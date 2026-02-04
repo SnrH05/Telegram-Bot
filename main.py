@@ -2006,9 +2006,9 @@ async def main():
     print("⚙️ Position Sizer: Initialized")
     
     try:
-        startup_msg = """🚀 **TITANIUM BOT V6.0 BAŞLATILDI!**
+        startup_msg = """🚀 <b>TITANIUM BOT V6.0 BAŞLATILDI!</b>
 
-🛡️ **YENİ: Production Hardened**
+🛡️ <b>YENİ: Production Hardened</b>
 • Kill-Switch: ATR Z-Score + BTC Flash
 • Drawdown Monitor: 10%/15%/20% Limits
 • Daily Loss Limit: -5%/-8%
@@ -2020,8 +2020,8 @@ async def main():
 ⚡ Rapid Eşiği: 65/100
 ✅ Borsa: KuCoin
 
-_Survival > Profitability_"""
-        await bot.send_message(chat_id=KANAL_ID, text=startup_msg, parse_mode=ParseMode.MARKDOWN)
+<i>Survival > Profitability</i>"""
+        await bot.send_message(chat_id=KANAL_ID, text=startup_msg, parse_mode=ParseMode.HTML)
     except Exception as e:
         print(f"❌ Telegram Test Mesajı Hatası: {e}")
 
