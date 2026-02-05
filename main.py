@@ -2384,8 +2384,7 @@ if __name__ == "__main__":
         logger.info(f"🔄 RECOVERY: Son rapor tarihi yüklendi: {SON_RAPOR_TARIHI}")
     
     # Shutdown handler kaydet
-    state_manager.register_shutdown_handlers()
-    state_manager.set_running(True)
+
     
     try:
         asyncio.run(main())
