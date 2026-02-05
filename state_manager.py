@@ -299,7 +299,7 @@ def load_state():
     """State'i yükle."""
     get_state_manager().load()
 
-def periodic_save(positions=None, signals=None, cooldowns=None):
+def periodic_save(positions=None, signals=None, cooldowns=None, last_report_date=None):
     """
     Periyodik state kaydetme helper fonksiyonu.
     
@@ -307,6 +307,7 @@ def periodic_save(positions=None, signals=None, cooldowns=None):
         positions: (Kullanılmıyor, DB'de tutuluyor)
         signals: Bugünün sinyalleri listesi
         cooldowns: Coin cooldown (son sinyal zamanı) sözlüğü
+        last_report_date: Son rapor tarihi (str: YYYY-MM-DD)
     """
     mgr = get_state_manager()
     
@@ -315,6 +316,9 @@ def periodic_save(positions=None, signals=None, cooldowns=None):
         
     if cooldowns is not None:
         mgr.son_sinyal_zamani = cooldowns
+
+    if last_report_date is not None:
+        mgr.son_rapor_tarihi = last_report_date
         
     mgr.save()
 

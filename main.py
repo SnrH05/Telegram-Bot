@@ -955,9 +955,9 @@ def islem_kaydet(coin, yon, giris, tp1, tp2, tp3, sl):
         conn.execute("INSERT INTO islemler (coin, yon, giris_fiyat, tp1, tp2, tp3, sl, acilis_zamani) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
                   (coin, yon, giris, tp1, tp2, tp3, sl, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
-async def gunluk_rapor_gonder():
+async def gunluk_rapor_gonder(tarih=None):
     try:
-        bugun = datetime.now().strftime("%Y-%m-%d")
+        bugun = tarih if tarih else datetime.now().strftime("%Y-%m-%d")
         logger.info(f"📊 {bugun} Günlük Rapor Hazırlanıyor...")
 
         with sqlite3.connect("titanium_live.db") as conn:
@@ -971,6 +971,7 @@ async def gunluk_rapor_gonder():
             df_rapor = pd.read_sql_query(query, conn, params=(bugun,))
 
         if df_rapor.empty:
+            logger.info(f"ℹ️ {bugun} için raporlanacak işlem yok.")
             return
 
         toplam_pnl = df_rapor['pnl_yuzde'].sum()
@@ -2322,10 +2323,13 @@ async def main():
                 # Continue with trading but log the error
             
             # Gün sonu raporu - İstanbul saati 23:55
+            # Gün sonu raporu - İstanbul saati 23:55
             if simdi.hour == 23 and simdi.minute >= 55 and SON_RAPOR_TARIHI != bugun_str:
                 logger.info(f"📊 Gün sonu raporu gönderiliyor... (İstanbul: {simdi.strftime('%H:%M')})")
-                await gunluk_rapor_gonder()
+                await gunluk_rapor_gonder(bugun_str)
                 SON_RAPOR_TARIHI = bugun_str
+                # Hemen kaydet
+                periodic_save(last_report_date=SON_RAPOR_TARIHI)
             
             await haberleri_kontrol_et()
             await piyasayi_tarama(exchange)
@@ -2337,10 +2341,12 @@ async def main():
             logger.info(f"📊 DD: {status['current_drawdown']:.1f}% | Daily: {status['daily_pnl']:.1f}% | KS: {'🔴' if status['kill_switch_active'] else '🟢'}")
             
             # 💾 Periyodik state kaydetme (her döngüde)
+            # 💾 Periyodik state kaydetme (her döngüde)
             periodic_save(
                 positions=None,  # DB'den çekilir
                 signals=BUGUNUN_SINYALLERI,
-                cooldowns=SON_SINYAL_ZAMANI
+                cooldowns=SON_SINYAL_ZAMANI,
+                last_report_date=SON_RAPOR_TARIHI
             )
             
             logger.debug("💤 Bekleme (1dk)...")
@@ -2372,8 +2378,17 @@ if __name__ == "__main__":
         for s in state_manager.bugunun_sinyalleri:
             if len(s) >= 3 and (s[1], s[2]) not in existing_set:
                 BUGUNUN_SINYALLERI.append(s)
+        
+    if state_manager.son_rapor_tarihi:
+        SON_RAPOR_TARIHI = state_manager.son_rapor_tarihi
+        logger.info(f"🔄 RECOVERY: Son rapor tarihi yüklendi: {SON_RAPOR_TARIHI}")
+    
+    # Shutdown handler kaydet
+    state_manager.register_shutdown_handlers()
+    state_manager.set_running(True)
     
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+```
