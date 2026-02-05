@@ -7,4 +7,4 @@ feedparser
 google-genai
 python-telegram-bot
 aiohttp
-
+pytest

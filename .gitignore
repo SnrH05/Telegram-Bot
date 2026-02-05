@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database (local only)
+*.db
+titanium_live.db
+titanium_state.json
+titanium_state.backup.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+*.log
