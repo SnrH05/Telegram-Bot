@@ -56,7 +56,7 @@ GUNLUK_SINYAL_LIMIT = 999   # Günlük limit (pratik olarak sınırsız)
 # Bu değerler strategy.py'de de tanımlı, merkezi tutarlılık için buradan kullan
 MAX_TEORIK_PUAN = 100
 SINYAL_ESIK = 65
-YAKIN_ESIK = 60
+YAKIN_ESIK = 50
 
 # ==========================================
 # ⏱️ ZAMANLAMA AYARLARI
@@ -70,7 +70,7 @@ RAPOR_DAKIKA = 55
 # ==========================================
 # 🛡️ RİSK YÖNETİMİ AYARLARI
 # ==========================================
-MAX_AYNI_ANDA_ISLEM = 5            # Aynı anda açık olabilecek işlem
+MAX_AYNI_ANDA_ISLEM = 23            # Aynı anda açık olabilecek işlem
 VARSAYILAN_SL_CARPANI = 2.0        # Varsayılan ATR çarpanı
 MIN_ATR_YUZDE = 0.5                # Minimum ATR% (volatilite kontrolü)
 

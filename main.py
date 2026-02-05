@@ -971,7 +971,9 @@ async def gunluk_rapor_gonder(tarih=None):
             df_rapor = pd.read_sql_query(query, conn, params=(bugun,))
 
         if df_rapor.empty:
-            logger.info(f"ℹ️ {bugun} için raporlanacak işlem yok.")
+            logger.info(f"ℹ️ {bugun} için raporlanacak işlem yok, boş rapor gönderiliyor.")
+            mesaj = f"📅 <b>GÜNLÜK RAPOR ({bugun})</b>\n\nℹ️ <i>Bugün herhangi bir işlem sonlanmadı.</i>\n\n💰 <b>NET PNL:</b> ➖ <b>%0.00</b>"
+            await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
             return
 
         toplam_pnl = df_rapor['pnl_yuzde'].sum()
