@@ -289,6 +289,7 @@ def get_state_manager() -> StateManager:
     return _state_manager
 
 
+
 # Convenience exports
 def save_state():
     """State'i kaydet."""
@@ -297,6 +298,28 @@ def save_state():
 def load_state():
     """State'i yükle."""
     get_state_manager().load()
+
+def periodic_save(positions=None, signals=None, cooldowns=None):
+    """
+    Periyodik state kaydetme helper fonksiyonu.
+    
+    Args:
+        positions: (Kullanılmıyor, DB'de tutuluyor)
+        signals: Bugünün sinyalleri listesi
+        cooldowns: Coin cooldown (son sinyal zamanı) sözlüğü
+    """
+    mgr = get_state_manager()
+    
+    if signals is not None:
+        mgr.bugunun_sinyalleri = signals
+        
+    if cooldowns is not None:
+        mgr.son_sinyal_zamani = cooldowns
+        
+    mgr.save()
+
+# Global export
+state_manager = get_state_manager()
 
 
 if __name__ == "__main__":

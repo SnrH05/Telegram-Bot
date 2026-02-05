@@ -2349,24 +2349,29 @@ async def main():
         logger.info("🛑 Bot Durduruluyor...")
     finally:
         # 💾 Son state kaydet
-        state_manager.state["is_running"] = False
-        state_manager.save_state()
+        if hasattr(state_manager, 'save'):
+            state_manager.save()
+        else:
+            # Fallback if method different
+            state_manager.save_state()
         logger.info("💾 State kaydedildi")
         await exchange.close()
 
 if __name__ == "__main__":
     # 🔄 Crash recovery kontrolü
-    recovery = state_manager.recover_from_crash()
-    if recovery.get("recovered"):
-        logger.info(f"🔄 RECOVERY: Son state {recovery['age_hours']:.1f} saat önce")
-        logger.info(f"   - Açık pozisyon: {recovery['open_positions']}")
-        logger.info(f"   - Günlük sinyal: {recovery['daily_signals']}")
-        SON_SINYAL_ZAMANI.update(recovery.get('cooldowns', {}))
-        BUGUNUN_SINYALLERI.extend(recovery.get('signals', []))
-    
-    # Shutdown handler kaydet
-    state_manager.register_shutdown_handlers()
-    state_manager.set_running(True)
+    # 🔄 State Yükle (Recovery)
+    # state_manager.load() is called in get_state_manager(), so state is already loaded if initialized
+    if state_manager.son_sinyal_zamani:
+        logger.info(f"🔄 RECOVERY: {len(state_manager.son_sinyal_zamani)} coin cooldown yüklendi")
+        SON_SINYAL_ZAMANI.update(state_manager.son_sinyal_zamani)
+        
+    if state_manager.bugunun_sinyalleri:
+        logger.info(f"🔄 RECOVERY: {len(state_manager.bugunun_sinyalleri)} günlük sinyal yüklendi")
+        # Extend current list avoiding duplicates
+        existing_set = set((s[1], s[2]) for s in BUGUNUN_SINYALLERI) # coin, yon
+        for s in state_manager.bugunun_sinyalleri:
+            if len(s) >= 3 and (s[1], s[2]) not in existing_set:
+                BUGUNUN_SINYALLERI.append(s)
     
     try:
         asyncio.run(main())
