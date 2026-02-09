@@ -20,7 +20,7 @@ from telegram.constants import ParseMode
 # 📋 LOGGING YAPILANDIRMASI
 # ==========================================
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s | %(levelname)-8s | %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
@@ -1718,7 +1718,7 @@ async def piyasayi_tarama(exchange):
         # Maksimum teorik puan hesapla (tüm yön bağımsız + en yüksek yön bağımlı puanlar)
         # BTC:20 + Reversal:18 + HTF:15 + Squeeze:15 + SMA200:12 + USDT:10 + RSI:10 + RSI4H:5 + VOL:8 + OBV:3 + ADX:7 = 123
         MAX_TEORIK_PUAN = 123
-        ESIK_ORAN = 0.60  # %60 eşik
+        ESIK_ORAN = 0.50  # %50 eşik (Daha hassas)
         
         ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN)  # 123 * 0.60 = 74
         YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.40)  # 123 * 0.40 = 49
@@ -1735,7 +1735,7 @@ async def piyasayi_tarama(exchange):
         elif max_score >= YAKIN_ESIK:
             # Eşiğe yakın - uyarı log
             eksik = ESIK - max_score
-            logger.debug(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
+            logger.info(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
         
         if long_score >= ESIK and long_score > short_score:
             sinyal = "LONG"
