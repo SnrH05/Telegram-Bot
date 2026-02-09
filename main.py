@@ -41,12 +41,51 @@ logger.info("⚙️ TITANIUM PREMIUM BOT (V6.1: PRODUCTION HARDENED) BAŞLATILIY
 # 🔧 AYARLAR
 # ==========================================
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
-KANAL_ID = int(os.getenv("KANAL_ID", "0"))
-GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
+KANAL_ID_RAW = os.getenv("KANAL_ID", "0")
+KANAL_ID_LIST = [int(x.strip()) for x in KANAL_ID_RAW.split(",") if x.strip()]
 
-if not TOKEN or not GEMINI_KEY or not KANAL_ID:
+if not TOKEN or not GEMINI_KEY or not KANAL_ID_LIST:
     logger.error("❌ HATA: ENV bilgileri eksik! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
     # sys.exit(1) 
+
+async def broadcast_message(text, parse_mode=ParseMode.HTML, disable_web_page_preview=None):
+    """
+    Tüm tanımlı kanallara mesaj gönderir.
+    """
+    for channel_id in KANAL_ID_LIST:
+        try:
+            await bot.send_message(
+                chat_id=channel_id, 
+                text=text, 
+                parse_mode=parse_mode, 
+                disable_web_page_preview=disable_web_page_preview
+            )
+        except Exception as e:
+            lock_message = f"⚠️ Mesaj gönderim hatası (Kanal: {channel_id}): {e}"
+            logger.warning(lock_message)
+
+async def broadcast_photo(photo, caption, parse_mode=ParseMode.HTML):
+    """
+    Tüm tanımlı kanallara fotoğraf gönderir.
+    """
+    for channel_id in KANAL_ID_LIST:
+        try:
+            # Fotoğrafı her gönderimde yeniden upload etmemek için file_id kullanılabilir 
+            # ancak burada basitlik için direkt gönderiyoruz. 
+            # Stream ise seek(0) gerekebilir, o yüzden dikkatli olunmalı.
+            
+            # Eğer photo bir bytesIO ise, her seferinde seek(0) yapmalıyız
+            if hasattr(photo, 'seek'):
+                photo.seek(0)
+                
+            await bot.send_photo(
+                chat_id=channel_id,
+                photo=photo,
+                caption=caption,
+                parse_mode=parse_mode
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Fotoğraf gönderim hatası (Kanal: {channel_id}): {e}") 
 
 # Gemini Client
 client = None
@@ -973,7 +1012,7 @@ async def gunluk_rapor_gonder(tarih=None):
         if df_rapor.empty:
             logger.info(f"ℹ️ {bugun} için raporlanacak işlem yok, boş rapor gönderiliyor.")
             mesaj = f"📅 <b>GÜNLÜK RAPOR ({bugun})</b>\n\nℹ️ <i>Bugün herhangi bir işlem sonlanmadı.</i>\n\n💰 <b>NET PNL:</b> ➖ <b>%0.00</b>"
-            await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+            await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
             return
 
         toplam_pnl = df_rapor['pnl_yuzde'].sum()
@@ -1030,7 +1069,7 @@ async def gunluk_rapor_gonder(tarih=None):
         mesaj += f"{kar_ikon} <b>Kâr/Zarar:</b> ${toplam_kar:+.2f}\n"
         mesaj += f"💎 <b>Final:</b> <b>${final_bakiye:.2f}</b>"
 
-        await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+        await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         logger.error(f"❌ Günlük Rapor Hatası: {e}")
@@ -1088,7 +1127,7 @@ async def haberleri_kontrol_et():
                 skor_icon = "🟢" if skor > 0 else "🔴"
                 mesaj = f"<b>{entry.title}</b>\n\n{ai_text}\n\n🎯 <b>Etki:</b> {skor_icon} <b>({skor})</b>\n🔗 <a href='{entry.link}'>Link</a>"
                 try:
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
                 except Exception as tg_err:
                     logger.warning(f"⚠️ Telegram Haber Gönderim Hatası: {tg_err}")
                 await asyncio.sleep(2)
@@ -1746,9 +1785,9 @@ async def piyasayi_tarama(exchange):
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
-            # V5.9: ATR yüzdesi %0.80'den düşükse sinyal verme (düşük volatilite)
+            # V5.9: ATR yüzdesi %0.60'den düşükse sinyal verme (düşük volatilite)
             atr_pct = (atr_val / price) * 100
-            if atr_pct < 0.80:
+            if atr_pct < 0.60:
                 logger.info(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
                 continue  # Volatilite yetersiz, sinyal verme
             
@@ -1832,9 +1871,9 @@ async def piyasayi_tarama(exchange):
 """
             try:
                 if resim:
-                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_photo(photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
                 else:
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.error(f"Telegram Hatasi: {e}")
         
@@ -1970,9 +2009,9 @@ async def rapid_strateji_tarama(exchange):
 """
             try:
                 if resim:
-                    await bot.send_photo(chat_id=KANAL_ID, photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_photo(photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
                 else:
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.error(f"Telegram Hatasi (Rapid): {e}")
 
@@ -2051,7 +2090,7 @@ async def pozisyonlari_yokla(exchange):
 🔒 <b>YENİ SL:</b> ${new_sl:{p_fmt}} ({sl_tipi})
 
 """
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
                     continue  # Check other TPs next cycle
             
             # --- MOMENTUM KONTROLÜ (TP1 SONRASI) ---
@@ -2127,7 +2166,7 @@ async def pozisyonlari_yokla(exchange):
 🔒 <b>YENİ SL:</b> ${new_sl:{p_fmt}}
 {devam_msg}
 """
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
                     continue
             
             # --- TP2 SONRASI TRAILING STOP (YENİ!) ---
@@ -2188,7 +2227,7 @@ async def pozisyonlari_yokla(exchange):
 
 🤖 <i>Titanium V5.4 - Trailing TP Success!</i>
 """
-                    await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
                     continue
             
             # --- STOP LOSS CHECK ---
@@ -2231,7 +2270,7 @@ async def pozisyonlari_yokla(exchange):
 
 🤖 <i>Titanium Bot</i>
 """
-                await bot.send_message(chat_id=KANAL_ID, text=mesaj, parse_mode=ParseMode.HTML)
+                await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
                 
         except Exception as e:
             logger.error(f"Pozisyon Takip Hatası ({coin}): {e}")

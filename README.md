@@ -56,9 +56,15 @@ TITANIUM Bot is an advanced, automated cryptocurrency trading bot designed for t
 
 3.  **Configuration:**
     Create a `.env` file (or set environment variables) with the following:
+
     ```env
     BOT_TOKEN=your_telegram_bot_token
-    KANAL_ID=your_telegram_channel_id
+    KANAL_ID=your_channel_id1, your_channel_id2
+    ```
+
+    _Note: You can add multiple channel IDs separated by commas._
+
+    ```env
     GEMINI_KEY=your_gemini_api_key
     ```
 

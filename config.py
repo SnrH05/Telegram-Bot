@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 # 🔧 BOT TEMEL AYARLARI
 # ==========================================
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
-KANAL_ID = int(os.getenv("KANAL_ID", "0"))
+# KANAL_ID artık liste olarak tutulacak
+KANAL_ID_RAW = os.getenv("KANAL_ID", "0")
+KANAL_ID = [int(x.strip()) for x in KANAL_ID_RAW.split(",") if x.strip()]
 GEMINI_KEY = os.getenv("GEMINI_KEY", "").strip()
 
 # ==========================================
