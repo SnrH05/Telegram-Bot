@@ -2257,24 +2257,24 @@ async def main():
     logger.info("🧠 Regime Detector: Initialized")
     logger.info("⚙️ Position Sizer: Initialized")
     
-    try:
-        startup_msg = """🚀 <b>TITANIUM BOT V6.0 BAŞLATILDI!</b>
-
-🛡️ <b>YENİ: Production Hardened</b>
-• Kill-Switch: ATR Z-Score + BTC Flash
-• Drawdown Monitor: 10%/15%/20% Limits
-• Regime Detection: TREND/RANGE/NO_TRADE
-• Position Sizing: Kelly-Inspired
-
-✅ Sistem: Aktif
-🎯 Sinyal Eşiği: 60/100
-⚡ Rapid Eşiği: 65/100
-✅ Borsa: KuCoin
-
-<i>Survival > Profitability</i>"""
-        await bot.send_message(chat_id=KANAL_ID, text=startup_msg, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        logger.error(f"❌ Telegram Test Mesajı Hatası: {e}")
+    # try:
+    #     startup_msg = """🚀 <b>TITANIUM BOT V6.0 BAŞLATILDI!</b>
+    # 
+    # 🛡️ <b>YENİ: Production Hardened</b>
+    # • Kill-Switch: ATR Z-Score + BTC Flash
+    # • Drawdown Monitor: 10%/15%/20% Limits
+    # • Regime Detection: TREND/RANGE/NO_TRADE
+    # • Position Sizing: Kelly-Inspired
+    # 
+    # ✅ Sistem: Aktif
+    # 🎯 Sinyal Eşiği: 60/100
+    # ⚡ Rapid Eşiği: 65/100
+    # ✅ Borsa: KuCoin
+    # 
+    # <i>Survival > Profitability</i>"""
+    #     await bot.send_message(chat_id=KANAL_ID, text=startup_msg, parse_mode=ParseMode.HTML)
+    # except Exception as e:
+    #     logger.error(f"❌ Telegram Test Mesajı Hatası: {e}")
 
     if "ETH" in COIN_LIST:
         COIN_LIST.remove("ETH")
