@@ -1746,9 +1746,9 @@ async def piyasayi_tarama(exchange):
         
         if sinyal:
             # ========== ATR-BASED TP/SL CALCULATION ==========
-            # V5.9: ATR yüzdesi %0.80'den düşükse sinyal verme (düşük volatilite)
+            # V5.9: ATR yüzdesi %0.60'den düşükse sinyal verme (düşük volatilite)
             atr_pct = (atr_val / price) * 100
-            if atr_pct < 0.80:
+            if atr_pct < 0.60:
                 logger.info(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
                 continue  # Volatilite yetersiz, sinyal verme
             
