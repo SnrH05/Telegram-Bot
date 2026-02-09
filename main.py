@@ -34,15 +34,18 @@ logger = logging.getLogger(__name__)
 from risk_manager import RiskManager
 from regime_detector import RegimeDetector, PositionSizer, SlippageModel, MarketRegime
 from state_manager import state_manager, periodic_save
+from config import (
+    TOKEN, GEMINI_KEY, KANAL_ID, COIN_LIST, RSS_LIST, 
+    COIN_COOLDOWN_SAAT, GUNLUK_SINYAL_LIMIT
+)
+KANAL_ID_LIST = KANAL_ID # map KANAL_ID to KANAL_ID_LIST for backward compatibility
 
 logger.info("⚙️ TITANIUM PREMIUM BOT (V6.1: PRODUCTION HARDENED) BAŞLATILIYOR...")
 
 # ==========================================
 # 🔧 AYARLAR
 # ==========================================
-TOKEN = os.getenv("BOT_TOKEN", "").strip()
-KANAL_ID_RAW = os.getenv("KANAL_ID", "0")
-KANAL_ID_LIST = [int(x.strip()) for x in KANAL_ID_RAW.split(",") if x.strip()]
+# (Konfigürasyon config.py üzerinden alınmaktadır)
 
 if not TOKEN or not GEMINI_KEY or not KANAL_ID_LIST:
     logger.error("❌ HATA: ENV bilgileri eksik! (BOT_TOKEN, KANAL_ID, GEMINI_KEY)")
@@ -107,18 +110,7 @@ exchange_config = {
     'timeout': 30000,  # 30 saniye timeout
 }
 
-# TITANIUM COIN LISTESI
-COIN_LIST = [
-    "BTC","ETH","SOL","XRP","BNB","ADA","AVAX","DOGE",
-    "TON","LINK","DOT","POL","LTC","BCH","PEPE","FET",
-    "SUI","APT","ARB","OP", "TIA", "INJ", "RENDER"
-]
-
-RSS_LIST = [
-    "https://cryptonews.com/news/feed/",
-    "https://cointelegraph.com/rss",
-    "https://decrypt.co/feed"
-]
+# COIN_LIST ve RSS_LIST config.py'den alınmaktadır.
 
 SON_SINYAL_ZAMANI = {}
 SON_RAPOR_TARIHI = None 
@@ -126,8 +118,7 @@ SON_RAPOR_TARIHI = None
 # ==========================================
 # 🎯 SİNYAL OPTİMİZASYONU AYARLARI (V5.9)
 # ==========================================
-COIN_COOLDOWN_SAAT = 4      # Aynı coin için minimum bekleme süresi (saat)
-GUNLUK_SINYAL_LIMIT = 999   # Günlük limit KALDIRILDI (eski: 8)
+# Ayarlar config.py'den alınmaktadır.
 BUGUNUN_SINYALLERI = []     # Bugün üretilen sinyallerin listesi
 
 # ==========================================
