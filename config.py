@@ -74,7 +74,7 @@ RAPOR_DAKIKA = 55
 # ==========================================
 MAX_AYNI_ANDA_ISLEM = 23            # Aynı anda açık olabilecek işlem
 VARSAYILAN_SL_CARPANI = 2.0        # Varsayılan ATR çarpanı
-MIN_ATR_YUZDE = 0.7                # Minimum ATR% (volatilite kontrolü)
+MIN_ATR_YUZDE = 0.8                # Minimum ATR% (volatilite kontrolü)
 
 # ==========================================
 # 🌐 GLOBAL DEĞİŞKENLER (Runtime state)
