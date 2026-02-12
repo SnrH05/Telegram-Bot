@@ -193,3 +193,92 @@ def calculate_macd(
     signal_line = calculate_ema(macd_line, signal)
     histogram = macd_line - signal_line
     return macd_line, signal_line, histogram
+
+
+def calculate_stochastic_rsi(
+    series: pd.Series,
+    rsi_period: int = 14,
+    stoch_period: int = 14,
+    k_smooth: int = 3,
+    d_smooth: int = 3
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    Stochastic RSI hesapla.
+    
+    RSI üzerine Stochastic formülü uygulayarak aşırı alım/satım
+    sinyallerini daha hassas tespit eder.
+    
+    Args:
+        series: Fiyat serisi (close)
+        rsi_period: RSI periyodu (default: 14)
+        stoch_period: Stochastic pencere periyodu (default: 14)
+        k_smooth: %K düzleştirme periyodu (default: 3)
+        d_smooth: %D düzleştirme periyodu (default: 3)
+        
+    Returns:
+        (stoch_k, stoch_d) tuple — her ikisi de 0-100 arasında
+    """
+    # Step 1: RSI hesapla
+    rsi = calculate_rsi(series, period=rsi_period)
+    
+    # Step 2: RSI üzerinde Stochastic formülü
+    rsi_low = rsi.rolling(window=stoch_period).min()
+    rsi_high = rsi.rolling(window=stoch_period).max()
+    
+    # Division by zero koruması (flat RSI durumlarında high == low)
+    denominator = rsi_high - rsi_low
+    denominator = denominator.replace(0, 1e-10)
+    
+    stoch_rsi = ((rsi - rsi_low) / denominator) * 100
+    
+    # Step 3: Düzleştirme — %K ve %D
+    stoch_k = stoch_rsi.rolling(window=k_smooth).mean()
+    stoch_d = stoch_k.rolling(window=d_smooth).mean()
+    
+    # Sınırlandır ve NaN temizle
+    stoch_k = stoch_k.clip(0, 100).fillna(50)
+    stoch_d = stoch_d.clip(0, 100).fillna(50)
+    
+    return stoch_k, stoch_d
+
+
+def calculate_cmf(df: pd.DataFrame, period: int = 20) -> pd.Series:
+    """
+    Chaikin Money Flow (CMF) hesapla.
+    
+    Para akışı yönünü tespit eder. Pozitif CMF = alım baskısı,
+    negatif CMF = satış baskısı.
+    
+    Formül:
+        MF Multiplier = ((close - low) - (high - close)) / (high - low)
+        MF Volume     = MF Multiplier × volume
+        CMF           = sum(MF Volume, period) / sum(volume, period)
+    
+    Args:
+        df: OHLCV DataFrame (high, low, close, volume sütunları gerekli)
+        period: CMF periyodu (default: 20)
+        
+    Returns:
+        CMF serisi (-1 ile +1 arasında)
+    """
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    volume = df['volume']
+    
+    # Money Flow Multiplier: ((C - L) - (H - C)) / (H - L)
+    hl_range = high - low
+    hl_range = hl_range.replace(0, 1e-10)  # Division by zero koruması
+    
+    mf_multiplier = ((close - low) - (high - close)) / hl_range
+    
+    # Money Flow Volume
+    mf_volume = mf_multiplier * volume
+    
+    # CMF = rolling sum(MF Volume) / rolling sum(Volume)
+    vol_sum = volume.rolling(window=period).sum()
+    vol_sum = vol_sum.replace(0, 1e-10)  # Division by zero koruması
+    
+    cmf = mf_volume.rolling(window=period).sum() / vol_sum
+    
+    return cmf.clip(-1, 1).fillna(0)

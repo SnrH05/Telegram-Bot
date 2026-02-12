@@ -15,6 +15,8 @@ from .indicators import (
     calculate_atr,
     calculate_adx,
     calculate_bollinger,
+    calculate_stochastic_rsi,
+    calculate_cmf,
 )
 
 from .scoring import (
@@ -32,6 +34,8 @@ __all__ = [
     'calculate_atr',
     'calculate_adx',
     'calculate_bollinger',
+    'calculate_stochastic_rsi',
+    'calculate_cmf',
     # Scoring
     'calculate_reversal_score',
     'calculate_rapid_score',
