@@ -224,8 +224,8 @@ def calculate_trend_aware_sl_multiplier(df, direction):
         
         # SL çarpanını belirle
         if adx_val > 35 and trend_aligned:
-            # Çok güçlü trend - geniş SL
-            return 4.0, "ÇOK GÜÇLÜ"
+            # Çok güçlü trend - SL max 2.5x ATR ile sınırlı
+            return 2.5, "ÇOK GÜÇLÜ"
         elif adx_val > 25 and trend_aligned and rsi_confirms:
             # Güçlü onaylı trend
             return 2.5, "GÜÇLÜ"
@@ -986,6 +986,7 @@ def islem_kaydet(coin, yon, giris, tp1, tp2, tp3, sl):
                   (coin, yon, giris, tp1, tp2, tp3, sl, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
 
 async def gunluk_rapor_gonder(tarih=None):
+    """Günlük rapor gönder. Başarılıysa True, hata olursa False döner."""
     try:
         bugun = tarih if tarih else datetime.now().strftime("%Y-%m-%d")
         logger.info(f"📊 {bugun} Günlük Rapor Hazırlanıyor...")
@@ -1004,7 +1005,7 @@ async def gunluk_rapor_gonder(tarih=None):
             logger.info(f"ℹ️ {bugun} için raporlanacak işlem yok, boş rapor gönderiliyor.")
             mesaj = f"📅 <b>GÜNLÜK RAPOR ({bugun})</b>\n\nℹ️ <i>Bugün herhangi bir işlem sonlanmadı.</i>\n\n💰 <b>NET PNL:</b> ➖ <b>%0.00</b>"
             await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
-            return
+            return True  # Boş rapor da başarılı sayılır
 
         toplam_pnl = df_rapor['pnl_yuzde'].sum()
         
@@ -1061,9 +1062,11 @@ async def gunluk_rapor_gonder(tarih=None):
         mesaj += f"💎 <b>Final:</b> <b>${final_bakiye:.2f}</b>"
 
         await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
+        return True  # Başarılı
 
     except Exception as e:
         logger.error(f"❌ Günlük Rapor Hatası: {e}")
+        return False  # Başarısız - tekrar denenecek
 
 
 
@@ -1609,22 +1612,29 @@ async def piyasayi_tarama(exchange):
             short_score += 6  # Yakın bölgede yarım puan
             short_breakdown.append("SMA200:6")
         
-        # 4️⃣ ADX GÜÇ (max 7 puan)
-        if adx_val > 30:
-            long_score += 7
-            short_score += 7
-            long_breakdown.append("ADX:7")
-            short_breakdown.append("ADX:7")
-        elif adx_val > 25:
-            long_score += 5
-            short_score += 5
-            long_breakdown.append("ADX:5")
-            short_breakdown.append("ADX:5")
-        elif adx_val > 20:
-            long_score += 3
-            short_score += 3
-            long_breakdown.append("ADX:3")
-            short_breakdown.append("ADX:3")
+        # 4️⃣ ADX GÜÇ (max 7 puan) - YÖNE BAĞIMLI: Sadece baskın yöne puan verir
+        if adx_val > 20:
+            # +DI ve -DI karşılaştır (ADX hesaplaması içinden)
+            df_adx_temp = df.copy()
+            df_adx_temp['up_move'] = df_adx_temp['high'] - df_adx_temp['high'].shift(1)
+            df_adx_temp['down_move'] = df_adx_temp['low'].shift(1) - df_adx_temp['low']
+            plus_dm = np.where((df_adx_temp['up_move'] > df_adx_temp['down_move']) & (df_adx_temp['up_move'] > 0), df_adx_temp['up_move'], 0)
+            minus_dm = np.where((df_adx_temp['down_move'] > df_adx_temp['up_move']) & (df_adx_temp['down_move'] > 0), df_adx_temp['down_move'], 0)
+            adx_bullish = pd.Series(plus_dm).ewm(alpha=1/14).mean().iloc[-1] > pd.Series(minus_dm).ewm(alpha=1/14).mean().iloc[-1]
+            
+            if adx_val > 30:
+                adx_puan = 7
+            elif adx_val > 25:
+                adx_puan = 5
+            else:
+                adx_puan = 3
+            
+            if adx_bullish:
+                long_score += adx_puan
+                long_breakdown.append(f"ADX:{adx_puan}")
+            else:
+                short_score += adx_puan
+                short_breakdown.append(f"ADX:{adx_puan}")
         
         # 5️⃣ RSI SEVİYE (max 10 puan) - V5.9: GEVŞETİLMİŞ
         # LONG için oversold: 30, 35, 40, 45
@@ -1674,42 +1684,42 @@ async def piyasayi_tarama(exchange):
             except Exception:
                 pass  # 4H RSI hesaplanamadı, bonus yok
         
-        # 6️⃣ HACİM ANALİZİ (max 8 puan)
+        # 6️⃣ HACİM ANALİZİ (max 8 puan) - YÖNE BAĞIMLI: Mum rengine göre yön belirler
         vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
         curr_vol = df['volume'].iloc[-1]
         vol_ratio = curr_vol / vol_sma20 if vol_sma20 > 0 else 1
         
-        if vol_ratio > 1.5:  # %50 üzeri hacim
-            long_score += 8
-            short_score += 8
-            long_breakdown.append("VOL:8")
-            short_breakdown.append("VOL:8")
-        elif vol_ratio > 1.25:  # %25 üzeri hacim
-            long_score += 5
-            short_score += 5
-            long_breakdown.append("VOL:5")
-            short_breakdown.append("VOL:5")
-        elif vol_ratio > 1.0:  # Ortalama üzeri
-            long_score += 2
-            short_score += 2
-            long_breakdown.append("VOL:2")
-            short_breakdown.append("VOL:2")
+        vol_bullish = price > df['open'].iloc[-1]  # Son mum yeşil mi?
         
-        # 🆕 V6.1: OBV (On-Balance Volume) TRENDİ (+3 bonus)
+        if vol_ratio > 1.5:  # %50 üzeri hacim
+            vol_puan = 8
+        elif vol_ratio > 1.25:  # %25 üzeri hacim
+            vol_puan = 5
+        elif vol_ratio > 1.0:  # Ortalama üzeri
+            vol_puan = 2
+        else:
+            vol_puan = 0
+        
+        if vol_puan > 0:
+            if vol_bullish:
+                long_score += vol_puan
+                long_breakdown.append(f"VOL:{vol_puan}")
+            else:
+                short_score += vol_puan
+                short_breakdown.append(f"VOL:{vol_puan}")
+        
+        # 🆕 V6.1: OBV (On-Balance Volume) TRENDİ (+3 bonus) - YÖNE BAĞIMLI
         # Hacim yönünün fiyat yönüyle uyumunu kontrol et
         try:
             obv = ((df['close'].diff() > 0).astype(int) * 2 - 1) * df['volume']
             obv_cumsum = obv.cumsum()
             obv_sma10 = obv_cumsum.rolling(10).mean()
             
-            # OBV son 10 mumda yükseliyor mu?
-            obv_rising = obv_cumsum.iloc[-1] > obv_sma10.iloc[-1]
-            obv_falling = obv_cumsum.iloc[-1] < obv_sma10.iloc[-1]
-            
-            if obv_rising:
+            # OBV yönü: Yükselen OBV sadece LONG'a, düşen sadece SHORT'a puan verir
+            if obv_cumsum.iloc[-1] > obv_sma10.iloc[-1]:
                 long_score += 3
                 long_breakdown.append("OBV:3")
-            if obv_falling:
+            elif obv_cumsum.iloc[-1] < obv_sma10.iloc[-1]:
                 short_score += 3
                 short_breakdown.append("OBV:3")
         except Exception:
@@ -1748,10 +1758,10 @@ async def piyasayi_tarama(exchange):
         # Maksimum teorik puan hesapla (tüm yön bağımsız + en yüksek yön bağımlı puanlar)
         # BTC:20 + Reversal:18 + HTF:15 + Squeeze:15 + SMA200:12 + USDT:10 + RSI:10 + RSI4H:5 + VOL:8 + OBV:3 + ADX:7 = 123
         MAX_TEORIK_PUAN = 123
-        ESIK_ORAN = 0.50  # %50 eşik (Daha hassas)
+        ESIK_ORAN = 0.60  # %60 eşik (Kalite odaklı)
         
         ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN)  # 123 * 0.60 = 74
-        YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.40)  # 123 * 0.40 = 49
+        YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.45)  # 123 * 0.45 = 55
         
         # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
         max_score = max(long_score, short_score)
@@ -1880,8 +1890,8 @@ async def rapid_strateji_tarama(exchange):
     """
     logger.info(f"⚡ ({datetime.now().strftime('%H:%M')}) RAPID REVERSAL TARAMA...")
     
-    # ESKİ: RAPID_ESIK = 50  # Çok fazla sinyal üretiyordu
-    RAPID_ESIK = 65  # YÜKSEK KALİTE: Güçlü reversal sinyalleri için artırıldı
+    # ESKİ: RAPID_ESIK = 65  # Hala çok fazla ters-yön sinyal üretiyordu
+    RAPID_ESIK = 80  # V6.2: Sadece çok güçlü reversal sinyalleri (win rate koruması)
     
     # Coin verilerini çek
     async def fetch_candle(s):
@@ -2306,8 +2316,9 @@ async def main():
     # except Exception as e:
     #     logger.error(f"❌ Telegram Test Mesajı Hatası: {e}")
 
-    if "ETH" in COIN_LIST:
-        COIN_LIST.remove("ETH")
+    # V6.2: ETH geri eklendi - yüksek likidite ve kaliteli sinyal kaynağı
+    # if "ETH" in COIN_LIST:
+    #     COIN_LIST.remove("ETH")
 
     try:
         while True:
@@ -2354,14 +2365,30 @@ async def main():
                 logger.warning(f"⚠️ Risk check error: {risk_err}")
                 # Continue with trading but log the error
             
-            # Gün sonu raporu - İstanbul saati 23:55
+            # 📋 MANUEL RAPOR TETİKLEYİCİ: force_report.trg dosyası varsa anında gönder
+            try:
+                if os.path.exists("force_report.trg"):
+                    logger.info("📋 MANUEL RAPOR TETİKLENDİ (force_report.trg bulundu)")
+                    os.remove("force_report.trg")
+                    rapor_ok = await gunluk_rapor_gonder(bugun_str)
+                    if rapor_ok:
+                        logger.info("✅ Manuel rapor başarıyla gönderildi")
+                    else:
+                        logger.error("❌ Manuel rapor gönderilemedi")
+            except Exception as manual_err:
+                logger.warning(f"⚠️ Manuel rapor hatası: {manual_err}")
+            
             # Gün sonu raporu - İstanbul saati 23:55
             if simdi.hour == 23 and simdi.minute >= 55 and SON_RAPOR_TARIHI != bugun_str:
                 logger.info(f"📊 Gün sonu raporu gönderiliyor... (İstanbul: {simdi.strftime('%H:%M')})")
-                await gunluk_rapor_gonder(bugun_str)
-                SON_RAPOR_TARIHI = bugun_str
-                # Hemen kaydet
-                periodic_save(last_report_date=SON_RAPOR_TARIHI)
+                rapor_basarili = await gunluk_rapor_gonder(bugun_str)
+                if rapor_basarili:
+                    SON_RAPOR_TARIHI = bugun_str
+                    # Hemen kaydet
+                    periodic_save(last_report_date=SON_RAPOR_TARIHI)
+                    logger.info("✅ Günlük rapor başarıyla gönderildi ve kaydedildi")
+                else:
+                    logger.error("❌ Günlük rapor gönderilemedi - sonraki döngüde tekrar denenecek")
             
             await haberleri_kontrol_et()
             await piyasayi_tarama(exchange)
