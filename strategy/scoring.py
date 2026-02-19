@@ -538,3 +538,346 @@ def calculate_range_score(
     }
     
     return long_score, short_score, long_breakdown, short_breakdown, tp_sl_info
+
+
+def calculate_total_score(
+    df: pd.DataFrame, 
+    group: str,
+    base_score: float = 0,
+    direction: str = "LONG"
+) -> Tuple[int, Dict[str, int]]:
+    """
+    V6.2 DİNAMİK SKORLAMA — 11 Faktörlü Multi-Skor Sistemi
+    
+    Her faktör LONG ve SHORT için farklı koşullar değerlendirir.
+    Maksimum teorik puan: 123
+    
+    Faktörler ve Maks Puanlar:
+        BTC Trend:      20  (BTC dominans ve yön uyumu)
+        Reversal:       18  (Momentum dönüşü)
+        HTF Trend:      15  (Üst zaman dilimi uyumu)
+        Squeeze:        15  (Volatilite sıkışması)
+        SMA200:         12  (Trend yapısı)
+        USDT Dom:       10  (Market sentiment)
+        RSI:            10  (Momentum)
+        RSI 4H:          5  (Üst periyot RSI)
+        VOL:             8  (Hacim teyidi)
+        OBV:             3  (Para akışı)
+        ADX:             7  (Trend gücü)
+        ─────────────────────
+        TOPLAM:        123
+    
+    Args:
+        df: OHLCV Dataframe
+        group: 'MAJOR', 'SWING' veya 'MEME'
+        base_score: Stratejiden gelen ham skor (bu sistem BUNU KULLANMAZ,
+                    strateji skoru ayrıca tutulabilir ama total 123'den hesaplanır)
+        direction: 'LONG' veya 'SHORT'
+        
+    Returns:
+        (total_score, breakdown)
+        total_score: 0-123 arası toplam puan
+        breakdown: {faktör_adı: puan} detay sözlüğü
+    """
+    breakdown = {}
+    
+    close = df['close'].iloc[-1]
+    
+    # ==========================================
+    # 1. BTC TREND PUANI (max 20)
+    # ==========================================
+    # BTC'nin genel yönü tüm altcoinleri etkiler
+    # Bu alan dış veri gerektirdiğinden, EMA yapısı ile approximate edilir
+    btc_puan = 0
+    try:
+        ema20 = df['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+        ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        ema100 = df['close'].ewm(span=100, adjust=False).mean().iloc[-1]
+        
+        if direction == "LONG":
+            # LONG: Bullish EMA dizilimi (EMA20 > EMA50 > EMA100)
+            if ema20 > ema50 > ema100:
+                btc_puan = 20  # Tam uyum
+            elif ema20 > ema50:
+                btc_puan = 12  # Kısmi uyum
+            elif close > ema50:
+                btc_puan = 6   # Minimum
+        else:  # SHORT
+            # SHORT: Bearish EMA dizilimi (EMA20 < EMA50 < EMA100)
+            if ema20 < ema50 < ema100:
+                btc_puan = 20
+            elif ema20 < ema50:
+                btc_puan = 12
+            elif close < ema50:
+                btc_puan = 6
+    except:
+        pass
+    breakdown['BTC'] = btc_puan
+    
+    # ==========================================
+    # 2. REVERSAL PUANI (max 18)
+    # ==========================================
+    # Momentum dönüşü tespiti, yöne göre farklı
+    reversal_puan = 0
+    try:
+        rsi14 = calculate_rsi(df['close'], 14)
+        rsi_now = rsi14.iloc[-1]
+        rsi_prev = rsi14.iloc[-2]
+        
+        # MACD histogram teyidi
+        macd_line = df['close'].ewm(span=12).mean() - df['close'].ewm(span=26).mean()
+        signal_line = macd_line.ewm(span=9).mean()
+        hist = macd_line - signal_line
+        
+        if direction == "LONG":
+            # Oversold'dan yukarı dönüş
+            if rsi_now < 35:
+                reversal_puan += 8   # Oversold bölge
+            elif rsi_now < 45:
+                reversal_puan += 4   # Approaching oversold
+            
+            if rsi_now > rsi_prev:
+                reversal_puan += 5   # RSI yukarı dönüyor
+            
+            if hist.iloc[-1] > hist.iloc[-2]:
+                reversal_puan += 5   # MACD histogram yukarı
+                
+        else:  # SHORT
+            # Overbought'tan aşağı dönüş
+            if rsi_now > 65:
+                reversal_puan += 8
+            elif rsi_now > 55:
+                reversal_puan += 4
+            
+            if rsi_now < rsi_prev:
+                reversal_puan += 5   # RSI aşağı dönüyor
+            
+            if hist.iloc[-1] < hist.iloc[-2]:
+                reversal_puan += 5   # MACD histogram aşağı
+    except:
+        pass
+    breakdown['Reversal'] = min(18, reversal_puan)
+    
+    # ==========================================
+    # 3. HTF (Higher Time Frame) PUANI (max 15)
+    # ==========================================
+    # Uzun vadeli trend uyumu — EMA50, EMA100, EMA200 dizilimi
+    htf_puan = 0
+    try:
+        ema50 = df['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        ema100 = df['close'].ewm(span=100, adjust=False).mean().iloc[-1]
+        ema200 = df['close'].ewm(span=200, adjust=False).mean().iloc[-1]
+        
+        if direction == "LONG":
+            if ema50 > ema100 > ema200:
+                htf_puan = 15  # Tam bullish yapı
+            elif ema50 > ema100:
+                htf_puan = 10
+            elif close > ema200:
+                htf_puan = 5
+        else:  # SHORT
+            if ema50 < ema100 < ema200:
+                htf_puan = 15  # Tam bearish yapı
+            elif ema50 < ema100:
+                htf_puan = 10
+            elif close < ema200:
+                htf_puan = 5
+    except:
+        pass
+    breakdown['HTF'] = htf_puan
+    
+    # ==========================================
+    # 4. SQUEEZE PUANI (max 15)
+    # ==========================================
+    # BB sıkışması + hacim artışı = potansiyel büyük hareket
+    squeeze_puan = 0
+    try:
+        sma20 = df['close'].rolling(20).mean()
+        std20 = df['close'].rolling(20).std()
+        bb_width = ((std20 * 2) / sma20 * 100).iloc[-1]
+        
+        # BB genişliği tarihsel olarak düşük mü?
+        bb_width_history = ((std20 * 2) / sma20 * 100).tail(50)
+        bb_percentile = (bb_width_history < bb_width).sum() / len(bb_width_history) * 100
+        is_bb_tight = bb_percentile < 20
+        
+        # Hacim artıyor mu?
+        vol_sma = df['volume'].rolling(20).mean().iloc[-1]
+        recent_vol = df['volume'].tail(3).mean()
+        vol_ratio = recent_vol / vol_sma if vol_sma > 0 else 1
+        vol_expanding = vol_ratio > 1.5
+        
+        if is_bb_tight and vol_expanding:
+            bb_score = min(8, int((20 - bb_percentile) / 2.5))
+            vol_score = min(7, int((vol_ratio - 1) * 3.5))
+            squeeze_puan = bb_score + vol_score
+    except:
+        pass
+    breakdown['Squeeze'] = min(15, squeeze_puan)
+    
+    # ==========================================
+    # 5. SMA200 PUANI (max 12)
+    # ==========================================
+    # Fiyatın SMA200'e göre konumu — trend yapısı
+    sma200_puan = 0
+    try:
+        sma200 = df['close'].rolling(200).mean().iloc[-1]
+        dist_pct = ((close - sma200) / sma200) * 100
+        
+        if direction == "LONG":
+            if close > sma200:
+                sma200_puan = 8   # Trend üstünde
+                if dist_pct > 3:
+                    sma200_puan = 12  # Güçlü trend üstünde
+        else:  # SHORT
+            if close < sma200:
+                sma200_puan = 8
+                if dist_pct < -3:
+                    sma200_puan = 12  # Güçlü trend altında
+    except:
+        pass
+    breakdown['SMA200'] = sma200_puan
+    
+    # ==========================================
+    # 6. USDT DOMİNANS PUANI (max 10)
+    # ==========================================
+    # Piyasa sentimenti — coin'in kendi momentum'una bakarak yaklaşık
+    usdt_puan = 0
+    try:
+        # Son 5 mumun yönü ile sentiment ölçümü
+        son5_degisim = (close - df['close'].iloc[-6]) / df['close'].iloc[-6] * 100
+        
+        if direction == "LONG":
+            # Son 5 mumda düşüş sonrası toparlanma (korku -> alım)
+            if son5_degisim < 0 and close > df['close'].iloc[-2]:
+                usdt_puan = 10  # Korku sonrası alım
+            elif close > df['close'].iloc[-2]:
+                usdt_puan = 5   # Genel pozitif
+        else:  # SHORT
+            # Son 5 mumda yükseliş sonrası düşüş (açgözlülük -> satış)
+            if son5_degisim > 0 and close < df['close'].iloc[-2]:
+                usdt_puan = 10  # Açgözlülük sonrası satış
+            elif close < df['close'].iloc[-2]:
+                usdt_puan = 5
+    except:
+        pass
+    breakdown['USDT'] = usdt_puan
+    
+    # ==========================================
+    # 7. RSI PUANI (max 10)
+    # ==========================================
+    rsi_puan = 0
+    try:
+        rsi14 = calculate_rsi(df['close'], 14).iloc[-1]
+        
+        if direction == "LONG":
+            if 30 <= rsi14 <= 45:
+                rsi_puan = 10  # İdeal dip bölge
+            elif 45 < rsi14 <= 55:
+                rsi_puan = 7   # Nötr-bullish
+            elif rsi14 < 30:
+                rsi_puan = 5   # Aşırı oversold (dikkat)
+        else:  # SHORT
+            if 55 <= rsi14 <= 70:
+                rsi_puan = 10  # İdeal tepe bölge
+            elif 45 <= rsi14 < 55:
+                rsi_puan = 7   # Nötr-bearish
+            elif rsi14 > 70:
+                rsi_puan = 5   # Aşırı overbought (dikkat)
+    except:
+        pass
+    breakdown['RSI'] = rsi_puan
+    
+    # ==========================================
+    # 8. RSI 4H PUANI (max 5)
+    # ==========================================
+    # Üst periyot RSI tahmini — son 4 mumun ortalaması
+    rsi4h_puan = 0
+    try:
+        # 4H RSI simülasyonu: 4 mum birleştir
+        if len(df) >= 56:  # 14 * 4 = en az 56 mum
+            df_4h = df.tail(56).copy()
+            # 4'lü gruplar halinde resample
+            close_4h = df_4h['close'].iloc[::4]
+            rsi_4h = calculate_rsi(close_4h, 14).iloc[-1]
+            
+            if direction == "LONG":
+                if 35 <= rsi_4h <= 55:
+                    rsi4h_puan = 5
+                elif rsi_4h < 35:
+                    rsi4h_puan = 3
+            else:  # SHORT
+                if 45 <= rsi_4h <= 65:
+                    rsi4h_puan = 5
+                elif rsi_4h > 65:
+                    rsi4h_puan = 3
+    except:
+        pass
+    breakdown['RSI4H'] = rsi4h_puan
+    
+    # ==========================================
+    # 9. VOL (Hacim) PUANI (max 8)
+    # ==========================================
+    vol_puan = 0
+    try:
+        vol_sma5 = df['volume'].rolling(5).mean().iloc[-1]
+        vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
+        vol_now = df['volume'].iloc[-1]
+        
+        # Hacim artıyor mu? (yönden bağımsız)
+        if vol_sma5 > vol_sma20:
+            vol_puan += 4
+        
+        # Anlık hacim spike
+        if vol_sma20 > 0:
+            vol_ratio = vol_now / vol_sma20
+            if vol_ratio > 2.0:
+                vol_puan += 4
+            elif vol_ratio > 1.5:
+                vol_puan += 2
+    except:
+        pass
+    breakdown['VOL'] = min(8, vol_puan)
+    
+    # ==========================================
+    # 10. OBV (On-Balance Volume) PUANI (max 3)
+    # ==========================================
+    obv_puan = 0
+    try:
+        from .indicators import calculate_obv
+        obv = calculate_obv(df)
+        obv_sma = obv.rolling(10).mean()
+        
+        if direction == "LONG":
+            if obv.iloc[-1] > obv_sma.iloc[-1]:
+                obv_puan = 3  # Para girişi
+        else:  # SHORT
+            if obv.iloc[-1] < obv_sma.iloc[-1]:
+                obv_puan = 3  # Para çıkışı
+    except:
+        pass
+    breakdown['OBV'] = obv_puan
+    
+    # ==========================================
+    # 11. ADX (Trend Gücü) PUANI (max 7)
+    # ==========================================
+    adx_puan = 0
+    try:
+        adx_val = calculate_adx(df).iloc[-1]
+        
+        if adx_val > 35:
+            adx_puan = 7   # Çok güçlü trend
+        elif adx_val > 25:
+            adx_puan = 5   # Güçlü trend
+        elif adx_val > 20:
+            adx_puan = 3   # Orta trend
+    except:
+        pass
+    breakdown['ADX'] = adx_puan
+    
+    # ==========================================
+    # TOPLAM HESAPLA
+    # ==========================================
+    total = sum(breakdown.values())
+    
+    return total, breakdown

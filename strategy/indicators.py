@@ -282,3 +282,73 @@ def calculate_cmf(df: pd.DataFrame, period: int = 20) -> pd.Series:
     cmf = mf_volume.rolling(window=period).sum() / vol_sum
     
     return cmf.clip(-1, 1).fillna(0)
+
+
+def calculate_supertrend(
+    df: pd.DataFrame, 
+    period: int = 10, 
+    multiplier: float = 3.0
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    SuperTrend İndikatörü hesapla.
+    
+    Args:
+        df: OHLCV DataFrame (high, low, close)
+        period: ATR periyodu
+        multiplier: ATR çarpanı
+        
+    Returns:
+        (supertrend_line, trend_direction)
+        trend_direction: 1 (UP), -1 (DOWN)
+    """
+    # ATR hesapla
+    df = df.copy()
+    atr = calculate_atr(df, period)
+    
+    # Basic Upper/Lower Bands
+    hl2 = (df['high'] + df['low']) / 2
+    basic_upper = hl2 + (multiplier * atr)
+    basic_lower = hl2 - (multiplier * atr)
+    
+    # Final Upper/Lower Bands başlat
+    final_upper = basic_upper.copy()
+    final_lower = basic_lower.copy()
+    trend = pd.Series(0, index=df.index)
+    
+    # İteratif hesaplama (SuperTrend doğası gereği önceki değere bakar)
+    # Pandas ile vektörel yapmak zordur, loop kullanacağız
+    for i in range(1, len(df)):
+        # Final Upper Band
+        if basic_upper.iloc[i] < final_upper.iloc[i-1] or df['close'].iloc[i-1] > final_upper.iloc[i-1]:
+            final_upper.iloc[i] = basic_upper.iloc[i]
+        else:
+            final_upper.iloc[i] = final_upper.iloc[i-1]
+            
+        # Final Lower Band
+        if basic_lower.iloc[i] > final_lower.iloc[i-1] or df['close'].iloc[i-1] < final_lower.iloc[i-1]:
+            final_lower.iloc[i] = basic_lower.iloc[i]
+        else:
+            final_lower.iloc[i] = final_lower.iloc[i-1]
+            
+        # Trend Yönü
+        # Önceki trend devam ediyor mu?
+        prev_trend = trend.iloc[i-1] if i > 0 else 1
+        
+        if prev_trend == 1: # Uptrend
+            if df['close'].iloc[i] < final_lower.iloc[i]:
+                trend.iloc[i] = -1 # Downtrend'e dön
+            else:
+                trend.iloc[i] = 1
+        else: # Downtrend
+            if df['close'].iloc[i] > final_upper.iloc[i]:
+                trend.iloc[i] = 1 # Uptrend'e dön
+            else:
+                trend.iloc[i] = -1
+                
+    # SuperTrend Line
+    supertrend = pd.Series(index=df.index, dtype='float64')
+    supertrend.loc[trend == 1] = final_lower
+    supertrend.loc[trend == -1] = final_upper
+    
+    return supertrend, trend
+

@@ -32,13 +32,82 @@ EXCHANGE_CONFIG = {
 }
 
 # ==========================================
-# 🪙 COIN VE RSS LİSTELERİ
+# 🪙 COIN GRUPLARI VE AYARLARI (V6.2)
 # ==========================================
-COIN_LIST = [
-    "BTC", "ETH", "SOL", "XRP", "BNB", "ADA", "AVAX", "DOGE",
-    "TON", "LINK", "DOT", "POL", "LTC", "BCH", "PEPE", "FET",
-    "SUI", "APT", "ARB", "OP", "TIA", "INJ", "RENDER"
-]
+# Grup 1: Trend Setters (Majors) - Trend Takibi — Yüksek market cap, düşük volatilite
+# Grup 2: Swing Players (Mid-Caps) - Kanal İçi (Mean Reversion) — Orta market cap, orta volatilite
+# Grup 3: Rockets (Meme/High Vol) - Hacim Patlaması — Düşük market cap, yüksek volatilite
+# NOT: Tüm coinler KuCoin spot USDT paritesinde aktif olarak doğrulanmıştır.
+COIN_GROUPS = {
+    "MAJOR": {
+        "coins": [
+            "BTC", "ETH", "SOL", "BNB", "XRP",
+            "ADA", "AVAX", "DOT", "TON", "TRX"
+        ],
+        "strategy": "TREND_FOLLOWING",
+        "params": {
+            "ema_trend": 200,
+            "ema_pullback": 50,
+            "rsi_min": 40,
+            "rsi_max": 60,
+            "stop_loss_mult": 1.0
+        }
+    },
+    "SWING": {
+        "coins": [
+            "LINK", "LTC", "ATOM", "NEAR", "UNI",
+            "AAVE", "INJ", "SEI", "TIA", "ARB",
+            "OP", "STX", "RUNE", "ICP", "HBAR",
+            "FIL", "ALGO", "VET", "PENDLE", "ONDO"
+        ],
+        "strategy": "MEAN_REVERSION",
+        "params": {
+            "bb_period": 20,
+            "bb_std": 2,
+            "stoch_rsi_overbought": 80,
+            "stoch_rsi_oversold": 20,
+            "stop_loss_atr": 1.5
+        }
+    },
+    "MEME": {
+        "coins": [
+            "DOGE", "SHIB", "PEPE", "WIF", "FLOKI",
+            "BONK", "SUI", "FET", "APT", "RENDER",
+            "JUP", "WLD", "TAO", "ORDI", "PYTH",
+            "IMX", "SAND", "GRT", "BLUR", "POPCAT",
+            "MEW", "TURBO", "BOME", "BRETT", "PEOPLE",
+            "NEIRO", "PNUT", "GOAT", "GRASS", "EIGEN"
+        ],
+        "strategy": "VOLATILITY_BREAKOUT",
+        "params": {
+            "supertrend_period": 10,
+            "supertrend_multiplier": 3,
+            "volume_ma": 20,
+            "volume_spike_mult": 2.5,
+            "rsi_period": 7,
+            "rsi_min": 60
+        }
+    }
+}
+
+# Geriye dönük uyumluluk için düz liste
+COIN_LIST = []
+for group in COIN_GROUPS.values():
+    COIN_LIST.extend(group["coins"])
+
+# ==========================================
+# 📊 SKORLAMA VE LİMİT AYARLARI (V6.2: DİNAMİK EŞİK)
+# ==========================================
+# Maksimum teorik puan (tüm yön bağımsız + en yüksek yön bağımlı puanlar)
+# BTC:20 + Reversal:18 + HTF:15 + Squeeze:15 + SMA200:12 + USDT:10 + RSI:10 + RSI4H:5 + VOL:8 + OBV:3 + ADX:7 = 123
+MAX_TEORIK_PUAN = 123
+ESIK_ORAN = 0.60  # %60 eşik (Kalite odaklı)
+
+SINYAL_ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN)        # 123 * 0.60 = 74
+YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.45)               # 123 * 0.45 = 55
+
+MIN_SCORE_THRESHOLD = SINYAL_ESIK  # Signal manager ve diğer kontroller için
+
 
 RSS_LIST = [
     "https://cryptonews.com/news/feed/",
@@ -51,14 +120,6 @@ RSS_LIST = [
 # ==========================================
 COIN_COOLDOWN_SAAT = 4      # Aynı coin için minimum bekleme süresi
 GUNLUK_SINYAL_LIMIT = 999   # Günlük limit (pratik olarak sınırsız)
-
-# ==========================================
-# 📈 SKOR EŞİKLERİ (strategy.py'den import edilebilir)
-# ==========================================
-# Bu değerler strategy.py'de de tanımlı, merkezi tutarlılık için buradan kullan
-MAX_TEORIK_PUAN = 100
-SINYAL_ESIK = 65
-YAKIN_ESIK = 50
 
 # ==========================================
 # ⏱️ ZAMANLAMA AYARLARI

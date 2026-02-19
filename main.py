@@ -35,9 +35,13 @@ from risk_manager import RiskManager
 from regime_detector import RegimeDetector, PositionSizer, SlippageModel, MarketRegime
 from state_manager import state_manager, periodic_save
 from config import (
-    TOKEN, GEMINI_KEY, KANAL_ID, COIN_LIST, RSS_LIST, 
-    COIN_COOLDOWN_SAAT, GUNLUK_SINYAL_LIMIT
+    TOKEN, GEMINI_KEY, KANAL_ID, COIN_LIST, RSS_LIST,
+    COIN_COOLDOWN_SAAT, GUNLUK_SINYAL_LIMIT, COIN_GROUPS,
+    MAX_TEORIK_PUAN, SINYAL_ESIK, YAKIN_ESIK
 )
+from signal_manager import signal_manager
+from strategy.strategies import check_trend_strategy, check_swing_strategy, check_rocket_strategy
+from strategy.scoring import calculate_total_score
 KANAL_ID_LIST = KANAL_ID # map KANAL_ID to KANAL_ID_LIST for backward compatibility
 
 logger.info("⚙️ TITANIUM PREMIUM BOT (V6.1: PRODUCTION HARDENED) BAŞLATILIYOR...")
@@ -1396,34 +1400,16 @@ async def btc_piyasa_puani_hesapla(exchange):
         return 0
 
 async def piyasayi_tarama(exchange):
-    logger.info(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V5.9 OPTİMİZE TARAMA (Eşik:75)...")
+    logger.info(f"🔍 ({datetime.now().strftime('%H:%M')}) TITANIUM V6.2 MULTI-GROUP TARAMA...")
     
-    # 1. BTC PUANINI HESAPLA (Volume Destekli)
+    # 1. Genel Piyasa Analizi (BTC & USDT) - Skorlamada Kullanılır
     btc_score = await btc_piyasa_puani_hesapla(exchange)
-    
-    # İkon Belirleme
-    if btc_score >= 1.5: btc_ikon = "🟢🟢 (Güçlü Bull)"
-    elif btc_score >= 0.5: btc_ikon = "🟢 (Bull)"
-    elif btc_score <= -1.5: btc_ikon = "🔴🔴 (Güçlü Bear)"
-    elif btc_score <= -0.5: btc_ikon = "🔴 (Bear)"
-    else: btc_ikon = "⚪ (Nötr)"
-
-    logger.info(f"🌍 BTC SKORU: {btc_score} -> {btc_ikon}")
-    
-    # 2. USDT HACİM AKIŞI ANALİZİ (YENİ!)
     usdt_score, usdt_flow_m, usdt_direction = await usdt_hacim_akisi_analiz(exchange)
     
-    # USDT İkon Belirleme
-    if usdt_direction == 'INFLOW':
-        usdt_ikon = "💹 INFLOW" if usdt_score > 0.5 else "📈 Hafif Giriş"
-    elif usdt_direction == 'OUTFLOW':
-        usdt_ikon = "📉 OUTFLOW" if usdt_score < -0.5 else "💸 Hafif Çıkış"
-    else:
-        usdt_ikon = "➡️ Nötr"
+    logger.info(f"🌍 BTC SKORU: {btc_score} | 💵 USDT AKIŞ: {usdt_flow_m:+.1f}M$")
     
-    logger.info(f"💵 USDT AKIŞ SKORU: {usdt_score:.2f} | Net: {usdt_flow_m:+.1f}M$ | {usdt_ikon}")
-    
-    # 2. COIN VERILERINI CEK
+    # 2. Coin Verilerini Çek (Toplu)
+    # COIN_LIST artık config.py'de tüm grupların birleşimi olarak tanımlı
     async def fetch_candle(s):
         try:
             ohlcv = await exchange.fetch_ohlcv(f"{s}/USDT", '1h', limit=300)
@@ -1435,586 +1421,162 @@ async def piyasayi_tarama(exchange):
     tasks = [fetch_candle(c) for c in COIN_LIST]
     results = await asyncio.gather(*tasks)
     
-    # ========== HTF (4H) TREND DATA ==========
-    async def fetch_htf_candle(s):
-        """4H mum verisi çek - HTF trend teyidi için"""
-        try:
-            ohlcv_4h = await exchange.fetch_ohlcv(f"{s}/USDT", '4h', limit=60)
-            return s, ohlcv_4h
-        except Exception as e:
-            logger.warning(f"⚠️ {s} HTF veri hatası: {e}")
-            return s, None
-    
-    htf_tasks = [fetch_htf_candle(c) for c in COIN_LIST]
-    htf_results = await asyncio.gather(*htf_tasks)
-    htf_data = {coin: data for coin, data in htf_results}
-    
+    # 3. Her Coin İçin Strateji Çalıştır
     for coin, bars in results:
         if not bars: continue
         
-        df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-        df['date'] = pd.to_datetime(df['date'], unit='ms')
-        df.set_index('date', inplace=True)
+        # Grubunu Bul
+        group_name = "UNKNOWN"
+        group_params = {}
+        for g_name, g_data in COIN_GROUPS.items():
+            if coin in g_data["coins"]:
+                group_name = g_name
+                group_params = g_data["params"]
+                break
         
-        # İndikatörler
-        df['sma50'] = calculate_sma(df['close'], 50)
-        df['sma200'] = calculate_sma(df['close'], 200)
-        df['rsi'] = calculate_rsi(df['close'])
-        df['adx'] = calculate_adx(df)
-        df['atr'] = calculate_atr(df)  # ATR for dynamic stops
-        
-        curr = df.iloc[-1]
-        price = curr['close']
-        rsi_val = curr['rsi']
-        adx_val = curr['adx']
-        atr_val = curr['atr']  # Current ATR value
-        
-        # 🛡️ DEFENSIVE: Skip if any indicator is NaN or inf
-        if pd.isna(rsi_val) or pd.isna(adx_val) or pd.isna(atr_val):
-            logger.warning(f"⚠️ SKIP {coin}: NaN indicator değeri (RSI={rsi_val}, ADX={adx_val}, ATR={atr_val})")
+        if group_name == "UNKNOWN":
+            logger.warning(f"⚠️ {coin} herhangi bir gruba ait değil, atlanıyor.")
             continue
-        if np.isinf(rsi_val) or np.isinf(adx_val) or np.isinf(atr_val):
-            logger.warning(f"⚠️ SKIP {coin}: Inf indicator değeri")
-            continue
-        
-        trend_guclu = adx_val > 25
-        
-        # ========== HTF (4H) TREND TEYİDİ ==========
-        htf_bullish = False
-        htf_bearish = False
-        
-        if coin in htf_data and htf_data[coin]:
-            df_4h = pd.DataFrame(htf_data[coin], columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-            df_4h['sma50'] = calculate_sma(df_4h['close'], 50)
-            df_4h['sma20'] = calculate_sma(df_4h['close'], 20)
             
-            curr_4h = df_4h.iloc[-1]
-            htf_price = curr_4h['close']
-            htf_sma50 = curr_4h['sma50']
-            htf_sma20 = curr_4h['sma20']
-            
-            # HTF Bullish: Fiyat > SMA50 VE SMA20 > SMA50 (uptrend)
-            htf_bullish = (htf_price > htf_sma50) and (htf_sma20 > htf_sma50)
-            # HTF Bearish: Fiyat < SMA50 VE SMA20 < SMA50 (downtrend)
-            htf_bearish = (htf_price < htf_sma50) and (htf_sma20 < htf_sma50)
-        
-        sinyal = None
-        setup = ""
-        
-        # 🚫 ANTI-SPAM: Skip if there's already an open position for this coin
-        if pozisyon_acik_mi(coin):
-            continue  # Wait until current position closes
-        
-        # 🕐 V5.9 COOLDOWN: Son sinyalden bu yana COIN_COOLDOWN_SAAT saat geçmeli
-        if coin in SON_SINYAL_ZAMANI:
-            gecen_sure = (datetime.now() - SON_SINYAL_ZAMANI[coin]).total_seconds() / 3600
-            if gecen_sure < COIN_COOLDOWN_SAAT:
-                continue  # Bu coin için henüz yeterli süre geçmedi
-        
-        # 📊 V5.9 GÜNLÜK LİMİT: Maksimum GUNLUK_SINYAL_LIMIT sinyal/gün
-        bugun_str = datetime.now().strftime("%Y-%m-%d")
-        bugunun_sinyal_sayisi = len([s for s in BUGUNUN_SINYALLERI if s[0] == bugun_str])
-        if bugunun_sinyal_sayisi >= GUNLUK_SINYAL_LIMIT:
-            continue  # Günlük limite ulaşıldı
-        
-        # ========== 📊 PUANLIK SKORLAMA SİSTEMİ V5.9 (100 ÜZERİNDEN) ==========
-        # Ağırlıklar (Toplam: 100 puan):
-        # - BTC Skoru: 20 puan (piyasa yönü - en önemli)
-        # - � REVERSAL: 18 puan (ani yön değişimi)
-        # - 4H HTF Trend: 15 puan (yüksek zaman dilimi teyidi)
-        # - SMA200 Trend: 12 puan (ana fiyat trendi)
-        # - 💵 USDT Akışı: 10 puan (para giriş/çıkışı)
-        # - RSI Seviye: 10 puan (momentum)
-        # - Hacim: 8 puan (coin bazlı volume)
-        # - ADX: 7 puan (trend gücü)
-        # TOPLAM: 100 puan max, 60+ = Sinyal
-        
-        long_score = 0
-        short_score = 0
-        long_breakdown = []
-        short_breakdown = []
-        
-        # 🔄 REVERSAL SKORU HESAPLA (max 18 puan)
-        rev_long, rev_short, rev_details = calculate_reversal_score(df)
-        
-        # 💵 USDT AKIŞ SKORU (max 10 puan)
-        if usdt_score >= 0.7:
-            long_score += 10
-            long_breakdown.append("USDT:10")
-        elif usdt_score >= 0.4:
-            long_score += 7
-            long_breakdown.append("USDT:7")
-        elif usdt_score >= 0.1:
-            long_score += 3
-            long_breakdown.append("USDT:3")
-        
-        if usdt_score <= -0.7:
-            short_score += 10
-            short_breakdown.append("USDT:10")
-        elif usdt_score <= -0.4:
-            short_score += 7
-            short_breakdown.append("USDT:7")
-        elif usdt_score <= -0.1:
-            short_score += 3
-            short_breakdown.append("USDT:3")
-        
-        # 1️⃣ BTC SKORU (max 20 puan) - V6.1: Nötr bölge eklendi
-        if btc_score >= 1.5:
-            long_score += 20
-            long_breakdown.append("BTC:20")
-        elif btc_score >= 1.0:
-            long_score += 15
-            long_breakdown.append("BTC:15")
-        elif btc_score >= 0.5:
-            long_score += 10
-            long_breakdown.append("BTC:10")
-        elif btc_score >= 0.3:  # 🆕 Nötr-pozitif bölge
-            long_score += 5
-            long_breakdown.append("BTC:5")
-            
-        if btc_score <= -1.5:
-            short_score += 20
-            short_breakdown.append("BTC:20")
-        elif btc_score <= -1.0:
-            short_score += 15
-            short_breakdown.append("BTC:15")
-        elif btc_score <= -0.5:
-            short_score += 10
-            short_breakdown.append("BTC:10")
-        elif btc_score <= -0.3:  # 🆕 Nötr-negatif bölge
-            short_score += 5
-            short_breakdown.append("BTC:5")
-        
-        # 2️⃣ 4H HTF TREND (max 15 puan)
-        if htf_bullish:
-            long_score += 15
-            long_breakdown.append("HTF:15")
-        if htf_bearish:
-            short_score += 15
-            short_breakdown.append("HTF:15")
-        
-        # 3️⃣ SMA200 TREND (max 12 puan) - V6.1: %1.5 mesafe koşulu eklendi
-        sma200_val = curr['sma200']
-        sma200_distance_pct = abs((price - sma200_val) / sma200_val) * 100 if sma200_val > 0 else 0
-        
-        # Sadece %1.5+ mesafede puan ver (whipsaw önleme)
-        if price > sma200_val and sma200_distance_pct >= 1.5:
-            long_score += 12
-            long_breakdown.append("SMA200:12")
-        elif price > sma200_val and sma200_distance_pct >= 0.5:
-            long_score += 6  # Yakın bölgede yarım puan
-            long_breakdown.append("SMA200:6")
-            
-        if price < sma200_val and sma200_distance_pct >= 1.5:
-            short_score += 12
-            short_breakdown.append("SMA200:12")
-        elif price < sma200_val and sma200_distance_pct >= 0.5:
-            short_score += 6  # Yakın bölgede yarım puan
-            short_breakdown.append("SMA200:6")
-        
-        # 4️⃣ ADX GÜÇ (max 7 puan) - YÖNE BAĞIMLI: Sadece baskın yöne puan verir
-        if adx_val > 20:
-            # +DI ve -DI karşılaştır (ADX hesaplaması içinden)
-            df_adx_temp = df.copy()
-            df_adx_temp['up_move'] = df_adx_temp['high'] - df_adx_temp['high'].shift(1)
-            df_adx_temp['down_move'] = df_adx_temp['low'].shift(1) - df_adx_temp['low']
-            plus_dm = np.where((df_adx_temp['up_move'] > df_adx_temp['down_move']) & (df_adx_temp['up_move'] > 0), df_adx_temp['up_move'], 0)
-            minus_dm = np.where((df_adx_temp['down_move'] > df_adx_temp['up_move']) & (df_adx_temp['down_move'] > 0), df_adx_temp['down_move'], 0)
-            adx_bullish = pd.Series(plus_dm).ewm(alpha=1/14).mean().iloc[-1] > pd.Series(minus_dm).ewm(alpha=1/14).mean().iloc[-1]
-            
-            if adx_val > 30:
-                adx_puan = 7
-            elif adx_val > 25:
-                adx_puan = 5
-            else:
-                adx_puan = 3
-            
-            if adx_bullish:
-                long_score += adx_puan
-                long_breakdown.append(f"ADX:{adx_puan}")
-            else:
-                short_score += adx_puan
-                short_breakdown.append(f"ADX:{adx_puan}")
-        
-        # 5️⃣ RSI SEVİYE (max 10 puan) - V5.9: GEVŞETİLMİŞ
-        # LONG için oversold: 30, 35, 40, 45
-        if rsi_val < 30:
-            long_score += 10
-            long_breakdown.append("RSI:10")
-        elif rsi_val < 35:
-            long_score += 8
-            long_breakdown.append("RSI:8")
-        elif rsi_val < 40:
-            long_score += 5
-            long_breakdown.append("RSI:5")
-        elif rsi_val < 45:
-            long_score += 3
-            long_breakdown.append("RSI:3")
-        
-        # SHORT için overbought: 70, 65, 60, 55
-        if rsi_val > 70:
-            short_score += 10
-            short_breakdown.append("RSI:10")
-        elif rsi_val > 65:
-            short_score += 8
-            short_breakdown.append("RSI:8")
-        elif rsi_val > 60:
-            short_score += 5
-            short_breakdown.append("RSI:5")
-        elif rsi_val > 55:
-            short_score += 3
-            short_breakdown.append("RSI:3")
-        
-        # 🆕 V6.1: RSI 4H TEYİDİ (+5 bonus)
-        # 1H RSI ile 4H RSI aynı yönü gösteriyorsa bonus puan
-        if coin in htf_data and htf_data[coin]:
-            try:
-                df_4h = pd.DataFrame(htf_data[coin], columns=['date', 'open', 'high', 'low', 'close', 'volume'])
-                rsi_4h = calculate_rsi(df_4h['close']).iloc[-1]
-                
-                # LONG: 1H RSI < 45 VE 4H RSI < 50 = Teyit
-                if rsi_val < 45 and rsi_4h < 50:
-                    long_score += 5
-                    long_breakdown.append("RSI4H:5")
-                
-                # SHORT: 1H RSI > 55 VE 4H RSI > 50 = Teyit
-                if rsi_val > 55 and rsi_4h > 50:
-                    short_score += 5
-                    short_breakdown.append("RSI4H:5")
-            except Exception:
-                pass  # 4H RSI hesaplanamadı, bonus yok
-        
-        # 6️⃣ HACİM ANALİZİ (max 8 puan) - YÖNE BAĞIMLI: Mum rengine göre yön belirler
-        vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
-        curr_vol = df['volume'].iloc[-1]
-        vol_ratio = curr_vol / vol_sma20 if vol_sma20 > 0 else 1
-        
-        vol_bullish = price > df['open'].iloc[-1]  # Son mum yeşil mi?
-        
-        if vol_ratio > 1.5:  # %50 üzeri hacim
-            vol_puan = 8
-        elif vol_ratio > 1.25:  # %25 üzeri hacim
-            vol_puan = 5
-        elif vol_ratio > 1.0:  # Ortalama üzeri
-            vol_puan = 2
-        else:
-            vol_puan = 0
-        
-        if vol_puan > 0:
-            if vol_bullish:
-                long_score += vol_puan
-                long_breakdown.append(f"VOL:{vol_puan}")
-            else:
-                short_score += vol_puan
-                short_breakdown.append(f"VOL:{vol_puan}")
-        
-        # 🆕 V6.1: OBV (On-Balance Volume) TRENDİ (+3 bonus) - YÖNE BAĞIMLI
-        # Hacim yönünün fiyat yönüyle uyumunu kontrol et
-        try:
-            obv = ((df['close'].diff() > 0).astype(int) * 2 - 1) * df['volume']
-            obv_cumsum = obv.cumsum()
-            obv_sma10 = obv_cumsum.rolling(10).mean()
-            
-            # OBV yönü: Yükselen OBV sadece LONG'a, düşen sadece SHORT'a puan verir
-            if obv_cumsum.iloc[-1] > obv_sma10.iloc[-1]:
-                long_score += 3
-                long_breakdown.append("OBV:3")
-            elif obv_cumsum.iloc[-1] < obv_sma10.iloc[-1]:
-                short_score += 3
-                short_breakdown.append("OBV:3")
-        except Exception:
-            pass  # OBV hesaplanamadı
-        
-        # 7️⃣ ANİ YÖN DEĞİŞİMİ - REVERSAL (max 18 puan)
-        # Reversal skorunu 30'dan 18'e normalize et (18/30 = 0.6 oranı)
-        # V6.1: ADX < 20 ise reversal puanını yarıya indir (choppy piyasa koruması)
-        reversal_multiplier = 0.3 if adx_val < 20 else 0.6  # 🆕 ADX kontrolü
-        
-        if rev_long > 0:
-            normalized_rev_long = int(rev_long * reversal_multiplier)
-            long_score += normalized_rev_long
-            long_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*reversal_multiplier)}" for d in rev_details])
-        if rev_short > 0:
-            normalized_rev_short = int(rev_short * reversal_multiplier)
-            short_score += normalized_rev_short
-            short_breakdown.extend([f"{d.split(':')[0]}:{int(int(d.split(':')[1])*reversal_multiplier)}" for d in rev_details])
-        
-        # Debug log for reversal detection
-        if rev_long > 0 or rev_short > 0:
-            adx_note = " [ADX<20: YARIM]" if adx_val < 20 else ""
-            logger.debug(f"🔄 REVERSAL TESPİT: {coin} | LONG+{int(rev_long*reversal_multiplier)} | SHORT+{int(rev_short*reversal_multiplier)} | {rev_details}{adx_note}")
-        
-        # 🔥 8️⃣ VOLATILITY SQUEEZE BONUS (max 15 puan)
-        # BB daralması + Hacim artışı = Büyük hareket öncüsü
-        is_squeeze, squeeze_bonus, squeeze_details = detect_volatility_squeeze(df)
-        if is_squeeze and squeeze_bonus > 0:
-            long_score += squeeze_bonus
-            short_score += squeeze_bonus
-            long_breakdown.append(f"SQUEEZE:{squeeze_bonus}")
-            short_breakdown.append(f"SQUEEZE:{squeeze_bonus}")
-            logger.info(f"🔥 SQUEEZE TESPİT: {coin} | BB%={squeeze_details.get('bb_percentile', 0):.0f} | Vol={squeeze_details.get('vol_ratio', 1):.1f}x | Bonus: +{squeeze_bonus}")
-        
-        # ========== SİNYAL KARARI (V6.1: DİNAMİK EŞİK) ==========
-        # Maksimum teorik puan hesapla (tüm yön bağımsız + en yüksek yön bağımlı puanlar)
-        # BTC:20 + Reversal:18 + HTF:15 + Squeeze:15 + SMA200:12 + USDT:10 + RSI:10 + RSI4H:5 + VOL:8 + OBV:3 + ADX:7 = 123
-        MAX_TEORIK_PUAN = 123
-        ESIK_ORAN = 0.60  # %60 eşik (Kalite odaklı)
-        
-        ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN)  # 123 * 0.60 = 74
-        YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.45)  # 123 * 0.45 = 55
-        
-        # 📊 SKORLARI LOGLA (Eşiğe yakın olanları göster)
-        max_score = max(long_score, short_score)
-        best_direction = "LONG" if long_score >= short_score else "SHORT"
-        best_breakdown = long_breakdown if long_score >= short_score else short_breakdown
-        
-        if max_score >= ESIK:
-            # Sinyal üretilecek - detaylı log
-            sinyal_ikon = "🟢" if best_direction == "LONG" else "🔴"
-            logger.info(f"{sinyal_ikon} SİNYAL! {coin}: {best_direction} {max_score}/100 ({'+'.join(best_breakdown)})")
-        elif max_score >= YAKIN_ESIK:
-            # Eşiğe yakın - uyarı log
-            eksik = ESIK - max_score
-            logger.info(f"⏳ YAKIN: {coin} {best_direction} {max_score}/100 (Eksik: {eksik}p) [{'+'.join(best_breakdown)}]")
-        
-        if long_score >= ESIK and long_score > short_score:
-            sinyal = "LONG"
-            setup = f"Score: {long_score}/100 ({'+'.join(long_breakdown)})"
-        elif short_score >= ESIK and short_score > long_score:
-            sinyal = "SHORT"
-            setup = f"Score: {short_score}/100 ({'+'.join(short_breakdown)})"
-        
-        if sinyal:
-            # ========== ATR-BASED TP/SL CALCULATION ==========
-            # V5.9: ATR yüzdesi %0.60'den düşükse sinyal verme (düşük volatilite)
-            atr_pct = (atr_val / price) * 100
-            if atr_pct < 0.60:
-                logger.info(f"⏸️ ATR DÜŞÜK: {coin} ATR={atr_pct:.2f}% < 0.80% - Sinyal iptal")
-                continue  # Volatilite yetersiz, sinyal verme
-            
-            # 🆕 V6.1: Trend-Uyumlu Dinamik SL Çarpanı
-            sl_multiplier, trend_strength = calculate_trend_aware_sl_multiplier(df, sinyal)
-            
-            # ATR Multipliers: SL=dinamik, TP1=2.5x, TP2=4.5x, TP3=7x
-            atr_sl = atr_val * sl_multiplier  # Dinamik SL çarpanı
-            atr_tp1 = atr_val * 2.5   # TP1: 2.5x ATR
-            atr_tp2 = atr_val * 4.5   # TP2: 4.5x ATR
-            atr_tp3 = atr_val * 7.0   # TP3: 7x ATR
-            
-            logger.debug(f"📊 {coin} SL: {sl_multiplier}x ATR (Trend: {trend_strength})")
-            
-            if sinyal == "LONG":
-                tp1_price = price + atr_tp1
-                tp2_price = price + atr_tp2
-                tp3_price = price + atr_tp3
-                sl_price = price - atr_sl
-            else:  # SHORT
-                tp1_price = price - atr_tp1
-                tp2_price = price - atr_tp2
-                tp3_price = price - atr_tp3
-                sl_price = price + atr_sl
-            
-            # Calculate percentages for display
-            tp1_pct = abs(tp1_price - price) / price * 100
-            tp2_pct = abs(tp2_price - price) / price * 100
-            tp3_pct = abs(tp3_price - price) / price * 100
-            sl_pct = abs(sl_price - price) / price * 100
-            atr_pct = (atr_val / price) * 100  # ATR as % of price
-            
-            p_fmt = ".8f" if price < 0.01 else ".4f"
-            
-            # Save with all TP levels
-            islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp3_price, sl_price)
-            SON_SINYAL_ZAMANI[coin] = datetime.now()
-            
-            # V5.9: Günlük sinyal listesine ekle
-            BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, sinyal))
-            
-            logger.info(f"🎯 {sinyal}: {coin} (Score: {long_score if sinyal == 'LONG' else short_score}/100, ATR: {atr_pct:.2f}%)")
-            
-            resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, sinyal)
-            ikon = "🟢" if sinyal == "LONG" else "🔴"
-            
-            # Skor bilgisi
-            skor_deger = long_score if sinyal == "LONG" else short_score
-            skor_breakdown = '+'.join(long_breakdown) if sinyal == "LONG" else '+'.join(short_breakdown)
-            
-            # Reversal bilgisi
-            rev_info = "🔄 Reversal: " + "+".join(rev_details) if rev_details else ""
-            
-            # Yüzdelik değişimleri hesapla (SHORT için mutlak değer - kazanç olarak göster)
-            tp1_pct = abs((tp1_price - price) / price) * 100
-            tp2_pct = abs((tp2_price - price) / price) * 100
-            tp3_pct = abs((tp3_price - price) / price) * 100
-            sl_pct = abs((sl_price - price) / price) * 100
-            
-            # TP'ler + (kazanç), SL - (risk) olarak göster
-            tp_sign = "+"
-            sl_sign = "-"
-            
-            mesaj = f"""
-{ikon} <b>TITANIUM SİNYAL ({sinyal})</b> #V6.1
-
-🪙 <b>Coin:</b> #{coin}
-🌍 <b>BTC:</b> {btc_score} {btc_ikon}
-💵 <b>USDT Akış:</b> {usdt_flow_m:+.1f}M$ {usdt_ikon}
-⏰ <b>Trend:</b> {'✅ Bullish' if htf_bullish else '🔴 Bearish' if htf_bearish else '⚪ Nötr'}
-{rev_info}
-
-💰 <b>Giriş:</b> ${price:{p_fmt}}
-
-🎯 <b>TP1 (33%):</b> ${tp1_price:{p_fmt}} ({tp_sign}{tp1_pct:.2f}%)
-🎯 <b>TP2 (33%):</b> ${tp2_price:{p_fmt}} ({tp_sign}{tp2_pct:.2f}%)
-🎯 <b>TP3 (34%):</b> ${tp3_price:{p_fmt}} ({tp_sign}{tp3_pct:.2f}%)
-🛑 <b>STOP (SL):</b> ${sl_price:{p_fmt}} ({sl_sign}{sl_pct:.2f}%)
-
-📌 <i>%{skor_deger} Güven Skoru</i>
-"""
-            try:
-                if resim:
-                    await broadcast_photo(photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
-                else:
-                    await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
-            except Exception as e:
-                logger.error(f"Telegram Hatasi: {e}")
-        
-        # V5.9: Range Trading KALDIRILDI - Sadece Trend + Rapid stratejileri aktif
-
-# ==========================================
-# ⚡ BÖLÜM 5.5: RAPID REVERSAL TARAMA
-# ==========================================
-async def rapid_strateji_tarama(exchange):
-    """
-    Rapid Reversal stratejisi - Ani piyasa değişimlerini tara
-    Mevcut trend stratejisinden BAĞIMSIZ çalışır
-    """
-    logger.info(f"⚡ ({datetime.now().strftime('%H:%M')}) RAPID REVERSAL TARAMA...")
-    
-    # ESKİ: RAPID_ESIK = 65  # Hala çok fazla ters-yön sinyal üretiyordu
-    RAPID_ESIK = 80  # V6.2: Sadece çok güçlü reversal sinyalleri (win rate koruması)
-    
-    # Coin verilerini çek
-    async def fetch_candle(s):
-        try:
-            ohlcv = await exchange.fetch_ohlcv(f"{s}/USDT", '1h', limit=50)
-            return s, ohlcv
-        except: 
-            return s, None
-
-    tasks = [fetch_candle(c) for c in COIN_LIST]
-    results = await asyncio.gather(*tasks)
-    
-    for coin, bars in results:
-        if not bars: 
-            continue
-        
         # 🚫 ANTI-SPAM: Açık pozisyon varsa atla
         if pozisyon_acik_mi(coin):
             continue
-        
-        # 🕐 V5.9 COOLDOWN: Rapid için de aynı cooldown uygula
+
+        # 🕐 COOLDOWN KONTROLÜ
         if coin in SON_SINYAL_ZAMANI:
             gecen_sure = (datetime.now() - SON_SINYAL_ZAMANI[coin]).total_seconds() / 3600
             if gecen_sure < COIN_COOLDOWN_SAAT:
                 continue
-        
-        # 📊 V5.9 GÜNLÜK LİMİT: Rapid sinyalleri de limiti kullanır
-        bugun_str = datetime.now().strftime("%Y-%m-%d")
-        bugunun_sinyal_sayisi = len([s for s in BUGUNUN_SINYALLERI if s[0] == bugun_str])
-        if bugunun_sinyal_sayisi >= GUNLUK_SINYAL_LIMIT:
-            continue
-        
+
+        # Veriyi Hazırla
         df = pd.DataFrame(bars, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
         df['date'] = pd.to_datetime(df['date'], unit='ms')
         df.set_index('date', inplace=True)
         
-        # İndikatörleri hesapla (grafik için gerekli)
-        df['sma50'] = calculate_sma(df['close'], 50)
-        df['sma200'] = calculate_sma(df['close'], 50)  # 50 kullan (50 mum var sadece)
-        df['rsi'] = calculate_rsi(df['close'])
-        df['atr'] = calculate_atr(df)
-        atr_val = df['atr'].iloc[-1]
-        price = df['close'].iloc[-1]
+        current_price = df['close'].iloc[-1]
         
-        # Rapid skor hesapla
-        rapid_long, rapid_short, rapid_details, tetikleyiciler = calculate_rapid_score(df)
+        # Stratejiyi Çalıştır
+        is_signal = False
+        direction = ""
+        raw_score = 0
+        details = {}
         
-        sinyal = None
+        if group_name == "MAJOR":
+            is_signal, direction, raw_score, details = check_trend_strategy(df, group_params)
+        elif group_name == "SWING":
+            is_signal, direction, raw_score, details = check_swing_strategy(df, group_params)
+        elif group_name == "MEME":
+            is_signal, direction, raw_score, details = check_rocket_strategy(df, group_params)
         
-        # RAPID LONG
-        if rapid_long >= RAPID_ESIK and rapid_long > rapid_short:
-            sinyal = "LONG"
-            skor = rapid_long
-        # RAPID SHORT
-        elif rapid_short >= RAPID_ESIK and rapid_short > rapid_long:
-            sinyal = "SHORT"
-            skor = rapid_short
-        
-        if sinyal:
-            # ========== RAPID TP/SL (SIKІ RİSK YÖNETİMİ) ==========
-            atr_sl = atr_val * 1.5   # Stop Loss: 1.5x ATR (daha sıkı)
-            atr_tp1 = atr_val * 2.0  # TP1: 2x ATR
-            atr_tp2 = atr_val * 3.0  # TP2: 3x ATR
+        if is_signal:
+            # Sinyal var, Toplam Skoru Hesapla (123'lük sistem)
+            total_score, breakdown = calculate_total_score(df, group_name, base_score=raw_score, direction=direction)
             
-            if sinyal == "LONG":
-                tp1_price = price + atr_tp1
-                tp2_price = price + atr_tp2
-                sl_price = price - atr_sl
-            else:  # SHORT
-                tp1_price = price - atr_tp1
-                tp2_price = price - atr_tp2
-                sl_price = price + atr_sl
-            
-            # Yüzdeler
-            tp1_pct = abs(tp1_price - price) / price * 100
-            tp2_pct = abs(tp2_price - price) / price * 100
-            sl_pct = abs(sl_price - price) / price * 100
-            
-            p_fmt = ".8f" if price < 0.01 else ".4f"
-            
-            # Kaydet (TP3'ü TP2 ile aynı tut - sadece 2 TP var)
-            islem_kaydet(coin, sinyal, price, tp1_price, tp2_price, tp2_price, sl_price)
-            SON_SINYAL_ZAMANI[coin] = datetime.now()
-            
-            # V5.9: Günlük sinyal listesine ekle
-            BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, f"RAPID-{sinyal}"))
-            
-            logger.info(f"⚡ RAPID {sinyal}: {coin} (Score: {skor}/100, Tetik: {', '.join(tetikleyiciler)})")
-            
-            # 🎨 GRAFİK OLUŞTUR (YENİ!)
-            resim = await grafik_olustur_async(coin, df.tail(50), tp1_price, sl_price, f"RAPID {sinyal}")
-            
-            ikon = "🟢" if sinyal == "LONG" else "🔴"
-            detail_str = '+'.join(rapid_details)
-            tetik_str = ' + '.join(tetikleyiciler) if tetikleyiciler else "Multi-trigger"
-            
-            # Yüzdelik değişimleri hesapla (mutlak değer - kazanç olarak göster)
-            tp1_pct = abs((tp1_price - price) / price) * 100
-            tp2_pct = abs((tp2_price - price) / price) * 100
-            sl_pct = abs((sl_price - price) / price) * 100
-            
-            mesaj = f"""
-⚡ <b>RAPID REVERSAL SİNYAL ({sinyal})</b> #V6.1-RAPID
+            # Sinyal Manager Kontrolü
+            if signal_manager.can_send_signal(coin, total_score):
+                
+                # Signal Manager'a kaydet
+                signal_manager.record_signal(coin, total_score, details.get('strategy', group_name))
+                SON_SINYAL_ZAMANI[coin] = datetime.now()
+                BUGUNUN_SINYALLERI.append((datetime.now().strftime("%Y-%m-%d"), coin, direction))
+                
+                # Hedefleri Belirle (Hacime Oranlı TP/SL)
+                atr = calculate_atr(df).iloc[-1]
+                
+                # Hacim oranı hesapla: vol_factor = mevcut hacim / ortalama hacim
+                # Yüksek hacim = güçlü momentum → hedefler genişler
+                # Düşük hacim = zayıf momentum → hedefler daralır
+                try:
+                    vol_sma20 = df['volume'].rolling(20).mean().iloc[-1]
+                    current_vol = df['volume'].iloc[-1]
+                    vol_ratio = current_vol / vol_sma20 if vol_sma20 > 0 else 1.0
+                    # 0.7x - 1.5x arasında sınırla (aşırı daralma/genişleme önle)
+                    vol_factor = max(0.7, min(1.5, vol_ratio))
+                except:
+                    vol_factor = 1.0
+                
+                # Grup bazlı temel çarpanlar
+                if group_name == "MEME":
+                    base_sl = 2.0
+                    base_tp1, base_tp2, base_tp3 = 3.0, 6.0, 10.0
+                elif group_name == "SWING":
+                    base_sl = 1.5
+                    base_tp1, base_tp2, base_tp3 = 2.0, 3.5, 5.0
+                else:  # MAJOR
+                    base_sl = 1.0
+                    base_tp1, base_tp2, base_tp3 = 2.0, 4.0, 6.0
+                
+                # Hacim faktörünü uygula
+                sl_atr_mult = base_sl * vol_factor
+                tp1_mult = base_tp1 * vol_factor
+                tp2_mult = base_tp2 * vol_factor
+                tp3_mult = base_tp3 * vol_factor
+                
+                if direction == "LONG":
+                    sl_price = current_price - (atr * sl_atr_mult)
+                    tp1_price = current_price + (atr * tp1_mult)
+                    tp2_price = current_price + (atr * tp2_mult)
+                    tp3_price = current_price + (atr * tp3_mult)
+                else:  # SHORT
+                    sl_price = current_price + (atr * sl_atr_mult)
+                    tp1_price = current_price - (atr * tp1_mult)
+                    tp2_price = current_price - (atr * tp2_mult)
+                    tp3_price = current_price - (atr * tp3_mult)
+                
+                # Grafiği Hazırla
+                resim = await grafik_olustur_async(coin, df.tail(100), tp1_price, sl_price, direction)
+                
+                # Mesajı Hazırla
+                p_fmt = ".8f" if current_price < 0.01 else ".4f"
+                
+                # Emojiler
+                grup_ikon = "💎" if group_name == "MAJOR" else ("🌊" if group_name == "SWING" else "🚀")
+                yon_ikon = "📈" if direction == "LONG" else "📉"
+                
+                # Skor çubuğu oluştur
+                skor_yuzde = int((total_score / MAX_TEORIK_PUAN) * 100)
+                dolu = skor_yuzde // 10
+                bos = 10 - dolu
+                skor_bar = "▓" * dolu + "░" * bos
+                
+                mesaj = f"""
+{grup_ikon} <b>TITANIUM V6.2 SİNYAL ({group_name})</b>
 
 🪙 <b>Coin:</b> #{coin}
-🔥 <b>Rapid Skor:</b> {skor}/100 ({detail_str})
-📊 <b>Tetikleyici:</b> {tetik_str}
+{yon_ikon} <b>Yön:</b> {direction}
+📊 <b>Strateji:</b> {details.get('strategy', 'N/A')}
+💯 <b>Skor:</b> {total_score}/{MAX_TEORIK_PUAN} ({skor_yuzde}%)
+{skor_bar}
 
-💰 <b>Giriş:</b> ${price:{p_fmt}}
+💰 <b>Giriş:</b> ${current_price:{p_fmt}}
 
-🎯 <b>TP1 (50%):</b> ${tp1_price:{p_fmt}} (+{tp1_pct:.2f}%)
-🎯 <b>TP2 (50%):</b> ${tp2_price:{p_fmt}} (+{tp2_pct:.2f}%)
-🛑 <b>SL:</b> ${sl_price:{p_fmt}} (-{sl_pct:.2f}%)
+🎯 <b>TP1:</b> ${tp1_price:{p_fmt}}
+🎯 <b>TP2:</b> ${tp2_price:{p_fmt}}
+🎯 <b>TP3:</b> ${tp3_price:{p_fmt}}
+🛑 <b>STOP:</b> ${sl_price:{p_fmt}}
 
-⚠️ <i>RAPID sinyal - Hızlı hareket bekleniyor!</i>
+⚠️ <i>Yatırım tavsiyesi değildir.</i>
 """
-            try:
+                # Gönder
                 if resim:
                     await broadcast_photo(photo=resim, caption=mesaj, parse_mode=ParseMode.HTML)
                 else:
                     await broadcast_message(text=mesaj, parse_mode=ParseMode.HTML)
-            except Exception as e:
-                logger.error(f"Telegram Hatasi (Rapid): {e}")
+                
+                # DB Kayıt
+                islem_kaydet(coin, direction, current_price, tp1_price, tp2_price, tp3_price, sl_price)
+                
+            else:
+                if total_score > YAKIN_ESIK:
+                     logger.info(f"⏳ Sinyal filtrelendi ({coin}): Skor {total_score}/{MAX_TEORIK_PUAN} (Eşik: {SINYAL_ESIK}) veya Limit Dolu")
+
+
+
+# ==========================================
+# ⚡ BÖLÜM 5.5: RAPID REVERSAL TARAMA
+# ==========================================
+# (Rapid Stratejisi artık MEME/Rocket grubu içinde otomatik taranıyor)
+
 
 # ==========================================
 # 🛡️ BÖLÜM 6: POZİSYON TAKİBİ (MULTI-TP)
@@ -2392,7 +1954,7 @@ async def main():
             
             await haberleri_kontrol_et()
             await piyasayi_tarama(exchange)
-            await rapid_strateji_tarama(exchange)  # ⚡ RAPID REVERSAL
+            # await rapid_strateji_tarama(exchange) # 🔥 Artık piyasayi_tarama içinde
             await pozisyonlari_yokla(exchange)
             
             # 📊 Periodic status log
