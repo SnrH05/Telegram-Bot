@@ -66,7 +66,8 @@ COIN_GROUPS = {
             "bb_std": 2,
             "stoch_rsi_overbought": 80,
             "stoch_rsi_oversold": 20,
-            "stop_loss_atr": 1.5
+            "stop_loss_atr": 1.5,
+            "signal_threshold_ratio": 0.50  # Range için daha düşük eşik
         }
     },
     "MEME": {
@@ -85,7 +86,7 @@ COIN_GROUPS = {
             "volume_ma": 20,
             "volume_spike_mult": 2.5,
             "rsi_period": 7,
-            "rsi_min": 60
+            "rsi_min": 50  # 60→50: Düşük volatilite dönemlerinde de sinyal üretsin
         }
     }
 }
@@ -96,15 +97,20 @@ for group in COIN_GROUPS.values():
     COIN_LIST.extend(group["coins"])
 
 # ==========================================
-# 📊 SKORLAMA VE LİMİT AYARLARI (V6.2: DİNAMİK EŞİK)
+# 📊 SKORLAMA VE LİMİT AYARLARI (V7.0: STRATEJİ BAZLI EŞİK)
 # ==========================================
 # Maksimum teorik puan (tüm yön bağımsız + en yüksek yön bağımlı puanlar)
 # BTC:20 + Reversal:18 + HTF:15 + Squeeze:15 + SMA200:12 + USDT:10 + RSI:10 + RSI4H:5 + VOL:8 + OBV:3 + ADX:7 = 123
 MAX_TEORIK_PUAN = 123
-ESIK_ORAN = 0.60  # %60 eşik (Kalite odaklı)
 
-SINYAL_ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN)        # 123 * 0.60 = 74
-YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.45)               # 123 * 0.45 = 55
+# Strateji bazlı eşik oranları — Broker İyileştirmesi #1
+ESIK_ORAN_TREND = 0.55   # Trend stratejisi: daha fazla sinyal üretsin
+ESIK_ORAN_RANGE = 0.50   # Range/MR: yüksek WR'ye güven, daha gevşek eşik
+ESIK_ORAN_MEME  = 0.52   # Meme/Volatility: ortada
+ESIK_ORAN = ESIK_ORAN_TREND  # Geriye dönük uyumluluk
+
+SINYAL_ESIK = int(MAX_TEORIK_PUAN * ESIK_ORAN_TREND)  # 123 * 0.55 = 67
+YAKIN_ESIK = int(MAX_TEORIK_PUAN * 0.42)               # 123 * 0.42 = 51
 
 MIN_SCORE_THRESHOLD = SINYAL_ESIK  # Signal manager ve diğer kontroller için
 
@@ -131,10 +137,11 @@ RAPOR_SAATI = 23                   # Günlük rapor saati (23:55)
 RAPOR_DAKIKA = 55
 
 # ==========================================
-# 🛡️ RİSK YÖNETİMİ AYARLARI
+# 🛡️ RİSK YÖNETİMİ AYARLARI (V7.0: Broker İyileştirmesi)
 # ==========================================
-MAX_AYNI_ANDA_ISLEM = 23            # Aynı anda açık olabilecek işlem
-VARSAYILAN_SL_CARPANI = 2.0        # Varsayılan ATR çarpanı
+MAX_AYNI_ANDA_ISLEM = 8             # Aynı anda açık olabilecek işlem (23→8: Korelasyon koruması)
+MAX_AYNI_GRUP_ISLEM = 3             # Aynı gruptan (MAJOR/SWING/MEME) max açık işlem sayısı
+VARSAYILAN_SL_CARPANI = 1.5        # Varsayılan ATR çarpanı (2.0→1.5: Daha az kayıp)
 MIN_ATR_YUZDE = 0.8                # Minimum ATR% (volatilite kontrolü)
 
 # ==========================================

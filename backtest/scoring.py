@@ -40,12 +40,11 @@ def calculate_vectorized_scores(df: pd.DataFrame) -> pd.DataFrame:
     
     # Oscillators
     df['rsi'] = calculate_rsi(df['close'], 14)
-    # df['rsi_4h'] = ... (Simulated by 4x period RSI approx or resampling? 
-    # For backtest speed, let's use coarser RSI approximation: RSI(56) on 1h ~= RSI(14) on 4h? 
-    # No, that's not accurate but acceptable for fast vectorization, or we just resample)
-    # Better: Use RSI(14) but look at trend of RSI? 
-    # Let's use simple RSI(56) as a proxy for "Higher Timeframe RSI" to avoid resampling complexity in pure vector calc
-    df['rsi_htf'] = calculate_rsi(df['close'], 14*4) 
+    # İyileştirme #7: Gerçek 4H RSI — Her 4 mumu bir kez örnekle (downsample)
+    # RSI(14) uygula ve interpolate et → RSI(56) proxy'sinden çok daha doğru
+    close_4h = df['close'].iloc[::4]           # her 4. mum = 4H kapanış
+    rsi_4h_raw = calculate_rsi(close_4h, 14)   # 4H RSI hesapla
+    df['rsi_htf'] = rsi_4h_raw.reindex(df.index).ffill()  # 1H indeksine geri taşı
     
     macd, signal, hist = calculate_macd(df['close'])
     df['macd_hist'] = hist
